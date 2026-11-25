@@ -353,8 +353,10 @@ export class Renderer {
       fx = 60; fy = MID_Y;
     } else if (sim.phase === 'presnap' || !sim.t) {
       const behindDefense = sim.kind === 'scrimmage' && dir !== sim.dir;
-      fx = sim.losX + dir * (behindDefense ? -3 : 2); fy = sim.ballY0;
-      if (behindDefense) { back += 2.5; height += 2.2; }
+      // Frame the whole formation: sit behind the quarterback (offense) or the
+      // second level (defense), a little higher than the in-play view.
+      fx = sim.losX + dir * (behindDefense ? -3 : -3.5); fy = sim.ballY0;
+      back += 1.5; height += behindDefense ? 2.4 : 1.6;
       if (sim.kind === 'kickoff' || sim.kind === 'onside') { back = 16; height = 11; ahead = 18; }
       if (sim.kind === 'punt') { ahead = 14; }
     } else {
