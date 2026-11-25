@@ -1,0 +1,28 @@
+{
+  "name": "gridiron27",
+  "version": "1.0.0",
+  "description": "Gridiron 27 — an original 3D American football game that runs in your browser",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --serve",
+    "test": "node test/headless.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/calebynhan/madden27.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/calebynhan/madden27/issues"
+  },
+  "homepage": "https://github.com/calebynhan/madden27#readme",
+  "devDependencies": {
+    "esbuild": "^0.24.2"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "type": "module"
+}
