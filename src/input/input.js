@@ -98,7 +98,11 @@ export class Input {
 
   poll() {
     const now = performance.now();
-    const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+    let gps = [];
+    if (!this.padsBlocked) {
+      // Some embedded/sandboxed frames forbid the Gamepad API; keep the keyboard working.
+      try { gps = (navigator.getGamepads && navigator.getGamepads()) || []; } catch { this.padsBlocked = true; gps = []; }
+    }
     for (let i = 0; i < gps.length; i++) {
       const gp = gps[i];
       if (!gp || !gp.connected) continue;

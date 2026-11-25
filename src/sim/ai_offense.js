@@ -264,7 +264,7 @@ function cpuPassDecision(sim, qb, dt) {
   // Internal clock: experienced QBs get the ball out once the play has run its course.
   const internalClock = elapsed > 1.3 + (awr - 70) * 0.006;
   // Hot: an unblocked rusher bearing down forces the ball out right now.
-  const hot = sim.def.some((d) => d.isActive() && !d.engaged && dist(d.x, d.y, qb.x, qb.y) < 3.8 && ((qb.x - d.x) * d.vx + (qb.y - d.y) * d.vy) > 0);
+  const hot = sim.def.some((d) => d.isActive() && !d.engaged && dist(d.x, d.y, qb.x, qb.y) < 3.2 && ((qb.x - d.x) * d.vx + (qb.y - d.y) * d.vy) > 0);
   const allRead = (readIdx >= reads.length - 1 && elapsed > interval * reads.length) || internalClock;
   if (underFire || allRead || hot) {
     // Checkdown: best of everyone
@@ -278,7 +278,7 @@ function cpuPassDecision(sim, qb, dt) {
     const mobile = qb.r.spd > 78;
     const room = !sim.def.some((d) => d.isActive() && dist(d.x, d.y, qb.x + sim.dir * 3, qb.y) < 3);
     if ((mobile || elapsed > 2.6) && room && sim.rng.chance(dt * (mobile ? 3.0 : 1.2))) { qb.qbRunner = true; sim.phase = 'run'; sim.playType = 'scramble'; return; }
-    if ((underFire || hot) && elapsed > 0.5 && sim.rng.chance(dt * (1.5 + (awr - 60) * 0.06))) {
+    if (underFire && elapsed > 0.6 && sim.rng.chance(dt * (0.8 + (awr - 60) * 0.035))) {
       const outside = Math.abs(sim.frame(qb.x, qb.y).l) > 3.2;
       // Throw it at the feet of the nearest receiver (no grounding) or out of bounds.
       const nearRec = reads.slice().sort((a, b) => dist(a.x, a.y, qb.x, qb.y) - dist(b.x, b.y, qb.x, qb.y))[0];
