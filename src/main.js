@@ -1,0 +1,235 @@
+// Gridiron 27 — application entry: game loop, screens, input routing, audio.
+import './ui/styles.css';
+import { Renderer } from './render/renderer.js';
+import { Input } from './input/input.js';
+import { Audio } from './audio/audio.js';
+import { UI } from './ui/ui.js';
+import { Game } from './sim/game.js';
+import { defaultLeague } from './data/league.js';
+import { SPECIAL_OFF } from './data/playbook_offense.js';
+import { RNG } from './core/rng.js';
+import { DT } from './core/constants.js';
+import { SeasonUI } from './season/season_ui.js';
+
+const DEFAULT_SETTINGS = { graphics: 'medium', camera: 'standard', volume: 0.7, gameSpeed: 1, autoSprint: false, showArt: true, difficulty: 1, quarterLen: 5 };
+
+class App {
+  constructor() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, this.loadSettings());
+    this.container = document.getElementById('app');
+    this.input = new Input();
+    this.audio = new Audio();
+    this.audio.setVolume(this.settings.volume);
+    this.renderer = new Renderer(this.container, this.settings);
+    this.view = { camDir: 1, camMode: this.settings.camera, replay: null, followReturn: true };
+    this.ui = new UI(this);
+    this.season = new SeasonUI(this);
+    this.openSeason = () => this.season.open();
+    this.game = null;
+    this.attract = null;
+    this.humans = [null, null];
+    this.paused = false;
+    this.acc = 0;
+    this.last = performance.now();
+    this.lastSim = null;
+    this.evIdx = new WeakMap();
+    this.input.on((ev) => { if (ev.type === 'padconnect') this.ui.toast(`Gamepad ${this.input.pads.length} connected`, 1.6); this.audio.resume(); });
+    window.addEventListener('pointerdown', () => this.audio.resume(), { once: false });
+    this.startAttract();
+    this.ui.showMainMenu();
+    const loading = document.getElementById('loading');
+    if (loading) loading.remove();
+    requestAnimationFrame((t) => this.loop(t));
+  }
+
+  loadSettings() { try { return JSON.parse(localStorage.getItem('g27-settings') || '{}'); } catch { return {}; } }
+  saveSettings() { try { localStorage.setItem('g27-settings', JSON.stringify(this.settings)); } catch { /* storage unavailable */ } }
+  applySettings(key) {
+    if (key === 'volume') this.audio.setVolume(this.settings.volume);
+    if (key === 'camera') this.view.camMode = this.settings.camera;
+    if (key === 'autoSprint') for (const s of this.input.sources()) s.autoSprint = this.settings.autoSprint;
+    this.saveSettings();
+  }
+
+  league() { return this.seasonLeague || defaultLeague(); }
+  specialPlay(kind) { return SPECIAL_OFF[kind]; }
+  humanCount() { return this.humans.filter(Boolean).length; }
+  teamOf(src) { const i = this.humans.indexOf(src); return i >= 0 ? i : null; }
+
+  // ------------------------------------------------------------------ attract mode
+  startAttract() {
+    const lg = defaultLeague();
+    const rng = new RNG((Math.random() * 1e9) >>> 0);
+    const a = rng.int(0, 31); let b = rng.int(0, 31); if (a === b) b = (b + 7) % 32;
+    this.attract = new Game({ teams: [lg[a], lg[b]], settings: { quarterLen: 15, difficulty: 2, accel: true, accelTo: 20, weather: rng.pick(['clear', 'clear', 'rain', 'snow']), time: rng.chance(0.5) ? 'night' : 'day' }, rng });
+    this.renderer.setupGame(this.attract);
+    this.attract.start();
+  }
+
+  // ------------------------------------------------------------------ games
+  startGame({ home, away, humans, settings, scenario, season, teams }) {
+    this.ui.clearScreen();
+    this.attract = null;
+    const lg = this.league();
+    const ts = teams || [lg[home], lg[away]];
+    for (const s of this.input.sources()) s.autoSprint = this.settings.autoSprint;
+    this.humans = humans.slice();
+    // Controllers array is shared with the sim; entries are refreshed each tick.
+    const controllers = [humans[0] ? humans[0].controller(1) : null, humans[1] ? humans[1].controller(1) : null];
+    const rng = new RNG((Math.random() * 1e9) >>> 0);
+    this.game = new Game({ teams: ts, settings: Object.assign({ gameSpeed: this.settings.gameSpeed }, settings), controllers, rng, scenario });
+    this.game.seasonGame = season || null;
+    this.gameOpts = { home, away, humans, settings, scenario, season, teams };
+    this.renderer.setupGame(this.game);
+    this.renderer.snapCamera();
+    this.view.replay = null;
+    this.paused = false;
+    this.ui.pcState = {};
+    this.ui.lastPhase = null;
+    this.game.on((type, data, g) => this.onGameEvent(type, data, g));
+    this.game.start();
+    this.audio.resume();
+    this.audio.crowd(0.45);
+  }
+
+  onGameEvent(type, data, g) {
+    if (g !== this.game) return;
+    if (type === 'result') {
+      this.lastSim = g.sim;
+      this.ui.onResult(g, data.result);
+      this.audio.whistle();
+      const r = data.result;
+      const gain = r.turnover ? 0 : (r.endX - g.sim.losX) * g.sim.dir;
+      if (r.td !== null || r.stats.intBy || (r.turnover && r.stats.fumbleBy) || gain > 18) this.audio.roar(0.8);
+    } else if (type === 'touchdown') { this.audio.horn(); this.audio.roar(1); }
+    else if (type === 'snap') this.audio.snap();
+    else if (type === 'twominute') this.ui.toast('Two-Minute Warning', 2);
+    else if (type === 'timeout') this.audio.whistle();
+    else if (type === 'quarter_end') this.ui.toast(`End of ${['', '1st', '2nd', '3rd', '4th'][data.quarter] || 'OT'} quarter`, 2);
+    else if (type === 'halftime') { this.ui.toast('Halftime', 2.5); }
+    else if (type === 'overtime') this.ui.toast('Overtime!', 2.5);
+    else if (type === 'penalty') this.ui.showTicker(`FLAG: ${data.text || data.type}`);
+    else if (type === 'final') setTimeout(() => this.onFinal(g), 1800);
+  }
+
+  onFinal(g) {
+    if (g !== this.game) return;
+    if (g.seasonGame) { this.season.onUserGameFinal(g); return; }
+    this.ui.hideInGame();
+    this.ui.showBoxScore(g, { buttons: [['Rematch', () => this.startGame(this.gameOpts), 'primary'], ['Main Menu', () => this.quitToMenu()]] });
+  }
+
+  quitToMenu() {
+    this.game = null;
+    this.paused = false;
+    this.view.replay = null;
+    this.humans = [null, null];
+    this.ui.hideInGame();
+    this.startAttract();
+    this.ui.showMainMenu();
+  }
+
+  togglePause() {
+    if (!this.game || this.game.over) return;
+    this.paused = !this.paused;
+    if (this.paused) this.ui.showPause(); else this.ui.clearScreen();
+  }
+
+  startReplay() {
+    const sim = this.lastSim;
+    if (!sim || !sim.frames.length) return;
+    this.view.replay = { sim, idx: 0, speed: 0.6, playing: true, angle: Math.PI * 0.75, radius: 16 };
+    this.renderer.bindPlay(sim);
+  }
+  endReplay() { this.view.replay = null; this.renderer.boundSim = null; this.renderer.snapCamera(); }
+
+  // Camera direction: behind the human's unit (offense or defense).
+  updateCamDir(g) {
+    const sim = g.sim;
+    if (!sim) return;
+    let dir = sim.dir;
+    const humans = [0, 1].filter((t) => g.isUser(t));
+    if (sim.kind === 'scrimmage') {
+      if (humans.length === 1 && humans[0] !== sim.offIdx) dir = -sim.dir;
+      if (sim.carrier && sim.carrier.team !== sim.offIdx && humans.length === 1 && humans[0] === sim.carrier.team) dir = sim.attackDir(sim.carrier.team);
+    } else {
+      dir = sim.dir;
+      if (sim.carrier && sim.carrier.team === sim.recvTeam && sim.phase === 'run') dir = sim.attackDir(sim.carrier.team);
+    }
+    this.view.camDir = dir;
+  }
+
+  // ------------------------------------------------------------------ loop
+  loop(t) {
+    requestAnimationFrame((tt) => this.loop(tt));
+    let dt = (t - this.last) / 1000;
+    this.last = t;
+    if (!(dt > 0)) dt = 0.016;
+    dt = Math.min(dt, 0.1);
+    this.input.poll();
+    const g = this.game || this.attract;
+    if (this.game) {
+      this.ui.preFrame(dt);
+      if (!this.paused && !this.view.replay) {
+        this.updateCamDir(this.game);
+        this.acc += dt * (this.game.settings.gameSpeed || 1);
+        let steps = 0;
+        while (this.acc >= DT && steps < 8) {
+          for (const tm of [0, 1]) if (this.humans[tm]) this.game.controllers[tm] = this.humans[tm].controller(this.view.camDir);
+          this.game.update(DT);
+          for (const s of this.humans) if (s) s.consume();
+          this.acc -= DT;
+          steps++;
+        }
+        if (steps === 8) this.acc = 0;
+        this.playSimSounds(this.game.sim);
+      } else {
+        for (const s of this.input.sources()) s.consume();
+      }
+      if (this.view.replay) {
+        const rp = this.view.replay;
+        if (rp.playing) rp.idx += dt * 30 * rp.speed;
+        if (rp.idx >= rp.sim.frames.length - 1) { rp.idx = rp.sim.frames.length - 1; rp.playing = false; }
+        rp.angle += dt * 0.15;
+      }
+    } else if (this.attract) {
+      this.view.camDir = this.attract.sim ? this.attract.sim.dir : 1;
+      this.acc += dt;
+      while (this.acc >= DT) { this.attract.update(DT); this.acc -= DT; }
+      // Keep the demo flowing: auto-advance through any phase
+      if (this.attract.over) this.startAttract();
+      for (const s of this.input.sources()) s.consume();
+    }
+    this.renderer.update(dt, g, this.view);
+    if (this.game) this.ui.postFrame(dt);
+    this.audio.tick(dt);
+  }
+
+  playSimSounds(sim) {
+    if (!sim) return;
+    let i = this.evIdx.get(sim) || 0;
+    const evs = sim.events;
+    for (; i < evs.length; i++) {
+      const e = evs[i];
+      switch (e.type) {
+        case 'tackle': this.audio.hit(!!e.hit); break;
+        case 'sack': this.audio.hit(true); this.audio.roar(0.6); break;
+        case 'catch': this.audio.catch_(); break;
+        case 'kick': case 'punt': case 'fgkick': this.audio.kick(); break;
+        case 'truck': case 'pancake': this.audio.hit(true); break;
+        case 'int': this.audio.roar(1); break;
+        default: break;
+      }
+    }
+    this.evIdx.set(sim, i);
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  try { window.__app = new App(); }
+  catch (e) {
+    console.error(e);
+    const l = document.getElementById('loading');
+    if (l) l.textContent = 'Could not start: ' + e.message + ' — your browser needs WebGL.';
+  }
+});

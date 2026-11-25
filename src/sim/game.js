@@ -46,6 +46,7 @@ export class Game {
     this.pendingPenalty = null;
     this.presnapWait = 0;
     this.headless = !!opts.headless;
+    this.scenario = opts.scenario || null;
   }
 
   on(fn) { this.listeners.push(fn); }
@@ -79,6 +80,8 @@ export class Game {
 
   // ------------------------------------------------------------------ start
   start() {
+    if (this.settings.practice) return this.resetPractice();
+    if (this.scenario === 'drill') return this.startDrill();
     // Coin toss: winner defers, so the toss loser receives the opening kickoff.
     const winner = this.rng.chance(0.5) ? 0 : 1;
     this.coinWinner = winner;
@@ -124,6 +127,7 @@ export class Game {
 
   // ------------------------------------------------------------------ play calling
   setupScrimmage(opts = {}) {
+    this.callId = (this.callId || 0) + 1;
     this.phase = 'playcall';
     this.phaseT = 0;
     this.calls = [null, null];
@@ -311,7 +315,7 @@ export class Game {
 
   // Run the game clock; handles two-minute warning and end of quarter between plays.
   runClock(sec, between) {
-    if (this.over) return;
+    if (this.over || this.settings.practice) return;
     const q = this.quarter;
     const before = this.clock;
     let after = before - sec;
@@ -813,11 +817,63 @@ export class Game {
     this.lastNextAction = this.next;
   }
 
+  // ------------------------------------------------------------------ practice & scenarios
+  resetPractice() {
+    const pr = this.settings.practice;
+    const userTeam = this.controllers[0] ? 0 : 1;
+    this.possession = pr.side === 'defense' ? 1 - userTeam : userTeam;
+    this.quarter = 1; this.clock = this.quarterLen; this.clockRunning = false;
+    this.score = [0, 0];
+    this.ballX = this.xFromYardLine(this.possession, pr.yardLine ?? 35);
+    this.ballY = MID_Y;
+    this.down = pr.down ?? 1;
+    this.firstDown();
+    this.down = pr.down ?? 1;
+    this.conversion = false;
+    this.next = null;
+    this.setupScrimmage({ playClock: 40 });
+  }
+
+  startDrill() {
+    const user = this.controllers[0] ? 0 : 1;
+    this.quarter = 4; this.clock = 120; this.twoMinWarned[4] = true; this.twoMinWarned[2] = true;
+    this.score[user] = 17; this.score[1 - user] = 21;
+    this.box.addScore(user, 1, 7); this.box.addScore(user, 2, 10); this.box.addScore(1 - user, 1, 14); this.box.addScore(1 - user, 3, 7);
+    this.timeouts = [3, 3]; this.timeouts[user] = 1;
+    this.possession = user;
+    this.ballX = this.xFromYardLine(user, 25); this.ballY = MID_Y;
+    this.firstDown();
+    this.startDrive();
+    this.log.push('Two-minute drill: down 4, 2:00 left, ball on your own 25.');
+    this.setupScrimmage({ playClock: 25 });
+  }
+
+  // Pre-snap audibles rebuild the play keeping the opponent's call.
+  audible(team, play, flip) {
+    if (this.phase !== 'presnap' || !this.sim || this.sim.kind !== 'scrimmage' || team !== this.possession) return false;
+    const old = this.sim;
+    this.calls[team] = { kind: 'scrimmage', play, flip };
+    this.sim = new PlaySim({ ...old.cfg, offPlay: play, flip, defPlay: old.defPlay });
+    this.sim.userEnt = [null, null];
+    this.sim.pickDefaultUsers();
+    return true;
+  }
+
+  audibleDefense(team, play) {
+    if (this.phase !== 'presnap' || !this.sim || this.sim.kind !== 'scrimmage' || team === this.possession) return false;
+    const old = this.sim;
+    this.calls[team] = { kind: 'scrimmage', play };
+    this.sim = new PlaySim({ ...old.cfg, defPlay: play });
+    this.sim.pickDefaultUsers();
+    return true;
+  }
+
   // ------------------------------------------------------------------ transitions
   advance() {
     const n = this.next || { type: 'scrimmage' };
     this.next = null;
     if (this.over) return;
+    if (this.settings.practice) { this.endDrive(); return this.resetPractice(); }
     switch (n.type) {
       case 'scrimmage': this.setupScrimmage(); break;
       case 'kickoff': this.setupKickoff(n.team, { fromYL: n.safety ? 20 : 35, safety: n.safety }); break;
