@@ -57,8 +57,13 @@ const path = require('path');
       await page.screenshot({ path: 'test/out/feat-def-assign.png' });
     } else if (s.phase === 'presnap' && s.kind === 'scrimmage' && s.poss === s.user) {
       await page.keyboard.press('Space');
-      await page.waitForTimeout(1700);
-      const s2 = await st();
+      // Wait (in real time) until the snap has reached the QB; a software renderer can run
+      // the game far below real time, so a fixed delay isn't enough.
+      let s2 = await st();
+      for (let k = 0; k < 60 && s2 && !s2.over && !(s2.simPhase !== 'presnap' && s2.qbBall && s2.simT > 0.9) && !s2.thrown && s2.simPhase !== 'dead'; k++) {
+        await page.waitForTimeout(400);
+        s2 = await st();
+      }
       if (s2 && s2.qbBall && !s2.thrown && results.throwWindupMs === null) {
         // Measured in game time (press -> ball out), so a slow software renderer in CI
         // (which runs the 60 Hz sim below real time) doesn't skew the result.
