@@ -11,7 +11,7 @@ import { RNG } from './core/rng.js';
 import { DT } from './core/constants.js';
 import { SeasonUI } from './season/season_ui.js';
 
-const DEFAULT_SETTINGS = { graphics: 'medium', camera: 'standard', volume: 0.7, gameSpeed: 1, autoSprint: false, showArt: true, difficulty: 1, quarterLen: 5 };
+const DEFAULT_SETTINGS = { graphics: 'medium', camera: 'standard', volume: 0.7, gameSpeed: 1, autoSprint: false, showArt: true, difficulty: 1, quarterLen: 5, announcer: true };
 
 class App {
   constructor() {
@@ -20,6 +20,7 @@ class App {
     this.input = new Input();
     this.audio = new Audio();
     this.audio.setVolume(this.settings.volume);
+    this.audio.announcer = this.settings.announcer;
     this.renderer = new Renderer(this.container, this.settings);
     this.view = { camDir: 1, camMode: this.settings.camera, replay: null, followReturn: true };
     this.ui = new UI(this);
@@ -46,6 +47,7 @@ class App {
   saveSettings() { try { localStorage.setItem('g27-settings', JSON.stringify(this.settings)); } catch { /* storage unavailable */ } }
   applySettings(key) {
     if (key === 'volume') this.audio.setVolume(this.settings.volume);
+    if (key === 'announcer') this.audio.announcer = this.settings.announcer;
     if (key === 'camera') this.view.camMode = this.settings.camera;
     if (key === 'autoSprint') for (const s of this.input.sources()) s.autoSprint = this.settings.autoSprint;
     this.saveSettings();
@@ -90,27 +92,75 @@ class App {
     this.game.start();
     this.audio.resume();
     this.audio.crowd(0.45);
+    this.halftime = false;
+    // Pre-game flyover with the matchup card (skippable with any key)
+    if (!this.game.settings.practice) {
+      this.intro = { t: 0, dur: this.game.scenario ? 3.5 : 6.5 };
+      this.view.intro = this.intro;
+      this.ui.showIntro(this.game);
+      const A = this.game.teams[1].def, H = this.game.teams[0].def;
+      this.audio.say(this.game.scenario ? `Two minute drill. ${H.name} trail by four.` : `Welcome to ${H.city}. The ${A.name} take on the ${H.name}.`);
+    }
+  }
+
+  endIntro() {
+    if (!this.intro) return;
+    this.intro = null;
+    this.view.intro = null;
+    this.ui.hideIntro();
+    this.renderer.snapCamera();
+  }
+
+  resumeHalftime() {
+    this.halftime = false;
+    this.ui.clearScreen();
   }
 
   onGameEvent(type, data, g) {
     if (g !== this.game) return;
+    const R = this.renderer;
     if (type === 'result') {
       this.lastSim = g.sim;
       this.ui.onResult(g, data.result);
       this.audio.whistle();
       const r = data.result;
-      const gain = r.turnover ? 0 : (r.endX - g.sim.losX) * g.sim.dir;
+      const s = g.sim;
+      const gain = r.turnover ? 0 : (r.endX - s.losX) * s.dir;
       if (r.td !== null || r.stats.intBy || (r.turnover && r.stats.fumbleBy) || gain > 18) this.audio.roar(0.8);
-    } else if (type === 'touchdown') { this.audio.horn(); this.audio.roar(1); }
+      // Board flashes and PA calls for the big moments
+      if (r.stats.intBy) { R.flashBoard('INTERCEPTION', '#ff4f5e', 1 - s.offIdx); this.audio.say('Intercepted!'); }
+      else if (r.turnover && r.stats.fumbleBy && s.kind === 'scrimmage') { R.flashBoard('FUMBLE', '#ff4f5e', 1 - s.offIdx); this.audio.say('Fumble! Turnover!'); }
+      else if ((s.kind === 'fg') && r.td === null) { if (r.fg) { R.flashBoard('FIELD GOAL', '#3ddc84', s.kickTeam); this.audio.say('The kick is good!'); } else this.audio.say('No good!'); }
+      else if (r.safety !== null && r.safety !== undefined) { R.flashBoard('SAFETY', '#ffcf1f', r.safety); this.audio.say('Safety!'); }
+      else if (r.playType === 'sack' && this.rng01() < 0.5) this.audio.say('Sacked!');
+      else if (g.lastText && g.lastText.includes('FIRST DOWN') && gain >= 15 && this.rng01() < 0.7) this.audio.say('First down!');
+    } else if (type === 'touchdown') {
+      this.audio.horn(); this.audio.roar(1);
+      const t = g.teams[data.team].def;
+      R.flashBoard('TOUCHDOWN', t.primary, data.team);
+      this.audio.say(`Touchdown, ${t.name}!`);
+    }
     else if (type === 'snap') this.audio.snap();
-    else if (type === 'twominute') this.ui.toast('Two-Minute Warning', 2);
+    else if (type === 'twominute') { this.ui.toast('Two-Minute Warning', 2); this.audio.say('Two minute warning.'); }
     else if (type === 'timeout') this.audio.whistle();
     else if (type === 'quarter_end') this.ui.toast(`End of ${['', '1st', '2nd', '3rd', '4th'][data.quarter] || 'OT'} quarter`, 2);
-    else if (type === 'halftime') { this.ui.toast('Halftime', 2.5); }
-    else if (type === 'overtime') this.ui.toast('Overtime!', 2.5);
-    else if (type === 'penalty') this.ui.showTicker(`FLAG: ${data.text || data.type}`);
-    else if (type === 'final') setTimeout(() => this.onFinal(g), 1800);
+    else if (type === 'halftime') {
+      if (this.humanCount() > 0) {
+        this.halftime = true;
+        this.ui.showBoxScore(g, { overlay: true, title: 'Halftime', buttons: [['Start Second Half', () => this.resumeHalftime(), 'primary']], onBack: () => this.resumeHalftime() });
+        this.audio.say('That will do it for the first half.');
+      } else this.ui.toast('Halftime', 2.5);
+    }
+    else if (type === 'overtime') { this.ui.toast('Overtime!', 2.5); this.audio.say('We are headed to overtime!'); }
+    else if (type === 'penalty') { this.ui.showTicker(`FLAG: ${data.text || data.type}`); if (this.rng01() < 0.6) this.audio.say(`Flag on the play. ${data.text || ''}`); }
+    else if (type === 'final') {
+      R.flashBoard('FINAL', '#19d3ff', g.score[0] > g.score[1] ? 0 : g.score[1] > g.score[0] ? 1 : null);
+      this.audio.say("That's the ball game!");
+      setTimeout(() => this.onFinal(g), 1800);
+    }
   }
+
+  rng01() { return Math.random(); }
 
   onFinal(g) {
     if (g !== this.game) return;
@@ -168,9 +218,14 @@ class App {
     dt = Math.min(dt, 0.1);
     this.input.poll();
     const g = this.game || this.attract;
+    this.view.excite = this.audio.crowdLevel || 0;
+    if (this.intro) {
+      this.intro.t += dt;
+      if (this.intro.t >= this.intro.dur) this.endIntro();
+    }
     if (this.game) {
       this.ui.preFrame(dt);
-      if (!this.paused && !this.view.replay) {
+      if (!this.paused && !this.view.replay && !this.intro && !this.halftime) {
         this.updateCamDir(this.game);
         this.acc += dt * (this.game.settings.gameSpeed || 1);
         let steps = 0;
@@ -182,6 +237,7 @@ class App {
           steps++;
         }
         if (steps === 8) this.acc = 0;
+        this.view.alpha = Math.min(1, this.acc / DT);
         this.playSimSounds(this.game.sim);
       } else {
         for (const s of this.input.sources()) s.consume();
@@ -196,6 +252,7 @@ class App {
       this.view.camDir = this.attract.sim ? this.attract.sim.dir : 1;
       this.acc += dt;
       while (this.acc >= DT) { this.attract.update(DT); this.acc -= DT; }
+      this.view.alpha = Math.min(1, this.acc / DT);
       // Keep the demo flowing: auto-advance through any phase
       if (this.attract.over) this.startAttract();
       for (const s of this.input.sources()) s.consume();

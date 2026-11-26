@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { FIELD_WIDTH, MID_Y } from '../core/constants.js';
 import { clamp } from '../core/util.js';
 import { buildField, toX, toZ } from './field.js';
-import { buildStadium } from './stadium.js';
+import { buildStadium, paintBoard } from './stadium.js';
+import { Sideline } from './sideline.js';
 import { PlayerModel, TeamLook, makeRing, makeBall } from './player.js';
 import { ANIM_LIST } from '../sim/play.js';
 import { buildRoute } from '../sim/play.js';
@@ -46,6 +47,18 @@ export class Renderer {
     this.lines = this.makeLines();
     this.artGroup = new THREE.Group();
     this.scene.add(this.artGroup);
+    // Ball trail for passes and kicks
+    this.trailN = 36;
+    this.trailPos = new Float32Array(this.trailN * 3);
+    this.trailCol = new Float32Array(this.trailN * 3);
+    const tg = new THREE.BufferGeometry();
+    tg.setAttribute('position', new THREE.BufferAttribute(this.trailPos, 3));
+    tg.setAttribute('color', new THREE.BufferAttribute(this.trailCol, 3));
+    this.trail = new THREE.Line(tg, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.75, depthWrite: false }));
+    this.trail.frustumCulled = false;
+    this.trail.visible = false;
+    this.scene.add(this.trail);
+    this.trailPts = [];
     this.weatherFx = null;
     this.camMode = settings.camera || 'standard';
     this.resize();
@@ -71,7 +84,11 @@ export class Renderer {
     this.night = night;
     const holder = { add: (o) => this.world.add(o) };
     this.fieldInfo = buildField(holder, home, { weather: game.weather.kind, hi: this.quality === 'high' });
-    buildStadium(holder, home, away, { night });
+    this.stadium = buildStadium(holder, home, away, { night });
+    this.sideline = new Sideline(holder, home, away);
+    this.boardT = 0;
+    this.boardFlash = null;
+    this.game = game;
     // Lighting
     const hemi = new THREE.HemisphereLight(night ? 0x8899bb : 0xcfe3ff, 0x2a4a22, night ? 0.55 : 0.75);
     this.world.add(hemi);
@@ -113,9 +130,16 @@ export class Renderer {
     let m = this.models.get(key);
     if (!m) {
       const p = e.p;
-      const size = clamp((p.ht || 74) / 74, 0.9, 1.12);
-      const bulk = clamp(0.85 + ((p.wt || 220) - 190) / 300, 0.85, 1.28);
-      m = new PlayerModel(this.looks[e.team], p.num, p.id % 7, size, bulk);
+      const id = p.id;
+      const skill = ['QB', 'HB', 'WR', 'CB', 'FS', 'SS', 'TE'].includes(p.pos);
+      m = new PlayerModel(this.looks[e.team], p.num, {
+        skin: id % 7,
+        size: clamp((p.ht || 74) / 74, 0.9, 1.12),
+        bulk: clamp(0.85 + ((p.wt || 220) - 190) / 300, 0.85, 1.28),
+        visor: id % 5 === 0 || (skill && id % 3 === 1),
+        sleeves: id % 3 === 0,
+        towel: skill && id % 4 === 1,
+      });
       this.models.set(key, m);
       this.scene.add(m.root);
     }
@@ -239,8 +263,19 @@ export class Renderer {
     if (sim && sim !== this.boundSim) this.bindPlay(sim);
     if (sim) {
       if (view.replay) this.applyReplayFrame(sim, view.replay, dt);
-      else this.syncEntities(sim, dt);
-      this.syncBall(sim, view.replay);
+      else this.syncEntities(sim, dt, view.alpha ?? 1);
+      this.syncBall(sim, view.replay, view.alpha ?? 1);
+    }
+    this.updateTrail(sim, view);
+    if (this.sideline) this.sideline.update(dt, game);
+    if (this.stadium && game) {
+      this.boardT -= dt;
+      if (this.boardFlash) { this.boardFlash.t -= dt; if (this.boardFlash.t <= 0) { this.boardFlash = null; this.boardT = 0; } }
+      if (this.boardT <= 0) { this.boardT = 0.5; for (const b of this.stadium.boards) paintBoard(b, game, this.boardFlash); }
+      // Crowd bounces with excitement
+      const ex = view.excite || 0;
+      const tt = performance.now() / 1000;
+      for (let i = 0; i < this.stadium.crowdTex.length; i++) this.stadium.crowdTex[i].offset.y = ex > 0.45 ? Math.sin(tt * 13 + i) * 0.012 * (ex - 0.4) : 0;
     }
     // Lines
     const showLines = !!(game && sim && sim.kind === 'scrimmage' && !view.replay);
@@ -274,17 +309,39 @@ export class Renderer {
     this.r.render(this.scene, this.camera);
   }
 
-  syncEntities(sim, dt) {
+  syncEntities(sim, dt, alpha = 1) {
     for (const e of sim.ents) {
       const m = this.modelFor(e);
-      m.root.position.set(toX(e.x), 0, toZ(e.y));
-      m.root.rotation.y = Math.PI / 2 - e.face;
+      // Interpolate between the last two simulation steps for smooth motion.
+      const x = e.px !== undefined ? e.px + (e.x - e.px) * alpha : e.x;
+      const y = e.py !== undefined ? e.py + (e.y - e.py) * alpha : e.y;
+      let face = e.face;
+      if (e.pface !== undefined) {
+        let d = e.face - e.pface;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        face = e.pface + d * alpha;
+      }
+      m.root.position.set(toX(x), 0, toZ(y));
+      m.root.rotation.y = Math.PI / 2 - face;
+      let dFace = m.lastFace === undefined ? 0 : face - m.lastFace;
+      while (dFace > Math.PI) dFace -= Math.PI * 2;
+      while (dFace < -Math.PI) dFace += Math.PI * 2;
+      m.lastFace = face;
+      m.turnRate = (m.turnRate || 0) * 0.82 + (dt > 0 ? dFace / dt : 0) * 0.18;
       let anim = e.anim;
       const sp = e.speed;
-      if ((anim === 'run' || anim === 'carry') && sp < 0.4) anim = e.hasBall ? 'idle' : 'idle';
       if (e.state === 'down') anim = 'down';
       else if (e.state === 'falling') anim = anim === 'tackle' || anim === 'dive' ? anim : 'fall';
-      m.animate(anim, sp, dt);
+      if ((anim === 'fall' || anim === 'down') && !m.fallSet) {
+        // Remember which way this player went down (backward if pushed opposite his facing).
+        const fx = Math.cos(e.face), fy = Math.sin(e.face);
+        const vs = Math.hypot(e.vx, e.vy) || 1;
+        m.fallBack = (e.vx * fx + e.vy * fy) / vs < -0.3;
+        m.fallSide = Math.max(-1, Math.min(1, (fx * e.vy - fy * e.vx) / vs));
+        m.fallSet = true;
+      } else if (anim !== 'fall' && anim !== 'down') m.fallSet = false;
+      m.animate(anim, sp, dt, { turnRate: m.turnRate, fallBack: m.fallBack, fallSide: m.fallSide });
     }
   }
 
@@ -297,15 +354,19 @@ export class Renderer {
       const x = f[i++], y = f[i++], face = f[i++], anim = ANIM_LIST[f[i++]] || 'idle', sp = f[i++];
       m.root.position.set(toX(x), 0, toZ(y));
       m.root.rotation.y = Math.PI / 2 - face;
-      m.animate(anim === 'run' && sp < 0.4 ? 'idle' : anim, sp, dt * rp.speed);
+      m.animate(anim, sp, dt * rp.speed, { turnRate: 0, fallBack: m.fallBack, fallSide: m.fallSide });
     }
     rp.ball = { x: f[i++], y: f[i++], z: f[i++], held: f[i++] };
   }
 
-  syncBall(sim, rp) {
+  syncBall(sim, rp, alpha = 1) {
     const b = rp && rp.ball ? rp.ball : sim.ball;
     const bm = this.ballModel;
-    bm.position.set(toX(b.x), Math.max(0.1, b.z), toZ(b.y));
+    const ia = !rp && b.px !== undefined ? alpha : 1;
+    const bx = ia < 1 ? b.px + (b.x - b.px) * ia : b.x;
+    const by = ia < 1 ? b.py + (b.y - b.py) * ia : b.y;
+    const bz = ia < 1 ? b.pz + (b.z - b.pz) * ia : b.z;
+    bm.position.set(toX(bx), Math.max(0.1, bz), toZ(by));
     if (!rp && (b.state === 'air' || b.state === 'kick')) {
       const yaw = Math.atan2(b.vy, b.vx);
       bm.rotation.set(0, -yaw, 0);
@@ -333,10 +394,50 @@ export class Renderer {
     obj.position.set(this.camLook.x, 0, this.camLook.z);
   }
 
+  updateTrail(sim, view) {
+    const b = sim && !view.replay ? sim.ball : null;
+    const flying = b && (b.state === 'air' || b.state === 'kick') && !b.pitch && !(sim.thrownAway);
+    if (!flying) {
+      if (this.trailPts.length) { this.trailPts.length = 0; this.trail.visible = false; }
+      return;
+    }
+    this.trailPts.push([toX(b.x), Math.max(0.1, b.z), toZ(b.y)]);
+    if (this.trailPts.length > this.trailN) this.trailPts.shift();
+    const n = this.trailPts.length;
+    for (let i = 0; i < this.trailN; i++) {
+      const p = this.trailPts[Math.max(0, n - this.trailN + i)] || this.trailPts[n - 1];
+      this.trailPos[i * 3] = p[0]; this.trailPos[i * 3 + 1] = p[1]; this.trailPos[i * 3 + 2] = p[2];
+      const a = n >= this.trailN ? i / (this.trailN - 1) : Math.max(0, (i - (this.trailN - n)) / Math.max(1, n - 1));
+      this.trailCol[i * 3] = 0.2 + a * 0.8; this.trailCol[i * 3 + 1] = 0.25 + a * 0.75; this.trailCol[i * 3 + 2] = 0.3 + a * 0.7;
+    }
+    this.trail.geometry.attributes.position.needsUpdate = true;
+    this.trail.geometry.attributes.color.needsUpdate = true;
+    this.trail.visible = n > 2;
+  }
+
+  flashBoard(text, color, team) {
+    this.boardFlash = { text, color, t: 3.5 };
+    this.boardT = 0;
+    if (this.sideline && team !== undefined && team !== null) this.sideline.celebrate[team] = 4;
+  }
+
   // ------------------------------------------------------------------ camera
   updateCamera(dt, game, sim, view) {
     const cfg = CAM[view.camMode || this.camMode] || CAM.standard;
     let fx, fy, dir = view.camDir || 1, back = cfg.back, height = cfg.height, ahead = cfg.ahead;
+    if (view.intro) {
+      // Pre-game flyover: sweep around the bowl and settle on the field.
+      const u = Math.min(1, view.intro.t / view.intro.dur);
+      const e = u * u * (3 - 2 * u);
+      const ang = Math.PI * (1.15 + e * 0.85);
+      const rad = 105 - e * 62;
+      const hgt = 42 - e * 30;
+      this.camera.position.set(Math.cos(ang) * rad, hgt, Math.sin(ang) * rad * 0.62);
+      this.camera.lookAt(0, 2 + (1 - e) * 6, 0);
+      this.camPos.copy(this.camera.position);
+      this.camLook.set(0, 0, 0);
+      return;
+    }
     if (view.replay) {
       const b = view.replay.ball || { x: 60, y: MID_Y, z: 0 };
       const ang = view.replay.angle;

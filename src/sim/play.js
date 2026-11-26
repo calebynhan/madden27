@@ -271,6 +271,9 @@ export class PlaySim {
 
   // ------------------------------------------------------------------ main step
   step(dt = DT) {
+    // Previous state for render interpolation
+    for (const e of this.ents) { e.px = e.x; e.py = e.y; e.pface = e.face; }
+    this.ball.px = this.ball.x; this.ball.py = this.ball.y; this.ball.pz = this.ball.z;
     if (this.dead) { this.deadT += dt; this.coastStep(dt); return; }
     if (this.phase === 'presnap') { this.presnapStep(dt); return; }
     this.t += dt;

@@ -50,6 +50,7 @@ export function buildStadium(scene, home, away, opts) {
   group.add(sky);
   const crowd = crowdTexture(home, away);
   const standMat = new THREE.MeshStandardMaterial({ map: crowd, roughness: 1 });
+  const crowdTex = [];
   const concrete = new THREE.MeshStandardMaterial({ color: 0x55595f, roughness: 1 });
   const wallMat = new THREE.MeshStandardMaterial({ color: home.primary, roughness: 0.8 });
   const L = FIELD_LENGTH + 24, Wd = FIELD_WIDTH + 24;
@@ -64,6 +65,7 @@ export function buildStadium(scene, home, away, opts) {
       tex.repeat.set((len + t.d) / 30, sl / 10);
       const mat = standMat.clone();
       mat.map = tex;
+      crowdTex.push(tex);
       const m = new THREE.Mesh(geo, mat);
       const holder = new THREE.Group();
       holder.rotation.y = rotY;
@@ -100,12 +102,75 @@ export function buildStadium(scene, home, away, opts) {
     panel.lookAt(0, 0, 0);
     group.add(panel);
   }
-  // Video boards behind each end zone
+  // Video boards behind each end zone, showing the live score
+  const boards = [];
+  const cv = document.createElement('canvas');
+  cv.width = 1024; cv.height = 360;
+  const boardTex = new THREE.CanvasTexture(cv);
+  boardTex.colorSpace = THREE.SRGBColorSpace;
+  const screenMat = new THREE.MeshBasicMaterial({ map: boardTex, fog: false });
   for (const sx of [-1, 1]) {
-    const board = new THREE.Mesh(new THREE.BoxGeometry(1, 12, 34), new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x0a2a55, emissiveIntensity: 0.6 }));
-    board.position.set(sx * (L / 2 + 44), 36, 0);
-    group.add(board);
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(1.4, 13, 36), new THREE.MeshStandardMaterial({ color: 0x15181d, roughness: 0.6 }));
+    frame.position.set(sx * (L / 2 + 44), 36, 0);
+    group.add(frame);
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(34, 11.9), screenMat);
+    screen.position.set(sx * (L / 2 + 44) - sx * 0.75, 36, 0);
+    screen.rotation.y = sx > 0 ? -Math.PI / 2 : Math.PI / 2;
+    group.add(screen);
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1, 30, 8), new THREE.MeshStandardMaterial({ color: 0x2a2d33 }));
+    post.position.set(sx * (L / 2 + 45), 15, 0);
+    group.add(post);
   }
+  boards.push({ canvas: cv, tex: boardTex });
   scene.add(group);
-  return group;
+  return { group, crowdTex, boards };
+}
+
+// Draw the live scoreboard onto the video-board canvas.
+export function paintBoard(board, game, flash) {
+  const { canvas: cv, tex } = board;
+  const g = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  g.fillStyle = '#05080f';
+  g.fillRect(0, 0, W, H);
+  if (flash) {
+    g.fillStyle = flash.color || '#ffcf1f';
+    g.fillRect(0, 0, W, H);
+    g.fillStyle = '#05080f';
+    g.font = '900 120px Impact, "Arial Black", sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(flash.text, W / 2, H / 2 + 6);
+    tex.needsUpdate = true;
+    return;
+  }
+  const A = game.teams[1].def, Hm = game.teams[0].def;
+  const col = (x, t, score) => {
+    g.fillStyle = t.primary;
+    g.fillRect(x, 30, 380, 210);
+    g.fillStyle = '#ffffff';
+    g.font = '900 64px Impact, "Arial Black", sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(t.abbr, x + 190, 80);
+    g.font = '900 120px Impact, "Arial Black", sans-serif';
+    g.fillText(String(score), x + 190, 180);
+  };
+  col(40, A, game.score[1]);
+  col(W - 420, Hm, game.score[0]);
+  g.fillStyle = '#ffffff';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  const q = game.quarter <= 4 ? `Q${game.quarter}` : 'OT';
+  const m = Math.floor(Math.max(0, game.clock) / 60), sec = Math.floor(Math.max(0, game.clock) % 60);
+  g.font = '700 46px Arial, sans-serif';
+  g.fillText(q, W / 2, 70);
+  g.font = '900 96px "Courier New", monospace';
+  g.fillStyle = '#ffcf1f';
+  g.fillText(`${m}:${sec < 10 ? '0' : ''}${sec}`, W / 2, 160);
+  g.fillStyle = '#9fb3d1';
+  g.font = '700 40px Arial, sans-serif';
+  g.fillText(game.phase === 'kick_call' ? 'KICKOFF' : game.downText ? game.downText().toUpperCase() : '', W / 2, 300);
+  // Possession arrow
+  g.fillStyle = '#ffcf1f';
+  const px = game.possession === 1 ? 230 : W - 230;
+  g.beginPath(); g.moveTo(px - 16, 262); g.lineTo(px + 16, 262); g.lineTo(px, 284); g.closePath(); g.fill();
+  tex.needsUpdate = true;
 }

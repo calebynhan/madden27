@@ -167,6 +167,7 @@ export class UI {
       ['Volume', 'volume', [0, 0.25, 0.5, 0.7, 0.85, 1], (v) => `${Math.round(v * 100)}%`],
       ['Game speed', 'gameSpeed', [0.85, 1, 1.15], (v) => (v === 1 ? 'Normal' : v < 1 ? 'Slow' : 'Fast')],
       ['Auto sprint', 'autoSprint', [false, true], (v) => (v ? 'On' : 'Off')],
+      ['Announcer voice', 'announcer', [true, false], (v) => (v ? 'On' : 'Off')],
       ['Play art pre-snap', 'showArt', [true, false], (v) => (v ? 'On' : 'Off')],
       ['Default difficulty', 'difficulty', [0, 1, 2, 3], (v) => DIFFICULTIES[v]],
       ['Default quarter length', 'quarterLen', [1, 2, 3, 4, 5, 6, 8, 10, 12, 15], (v) => `${v} min`],
@@ -328,6 +329,8 @@ export class UI {
     if (this.screenNav && app.game && (app.paused || app.game.over)) { if (nav) this.screenNav(nav, ev); return; }
     const g = app.game;
     if (!g) return;
+    if (app.intro) { app.endIntro(); return; }
+    if (app.halftime && this.screenNav) { if (nav) this.screenNav(nav, ev); return; }
     // Replay controls
     if (app.view.replay) { this.replayInput(ev, nav); return; }
     if (ev.actions && ev.actions.includes('pause') && !this.popup) { app.togglePause(); return; }
@@ -714,7 +717,7 @@ export class UI {
     const g = app.game;
     if (this.toastT > 0) { this.toastT -= dt; if (this.toastT <= 0) this.layer.toast.classList.add('hidden'); }
     if (this.bannerT > 0) { this.bannerT -= dt; if (this.bannerT <= 0) this.layer.banner.classList.add('hidden'); }
-    if (!g || app.paused) return;
+    if (!g || app.paused || app.intro || app.halftime) return;
     if (g.phase !== this.lastPhase) this.onPhaseChange(this.lastPhase, g.phase);
     if (g.phase === 'kick_call' && g.isUser(g.kickTeam) && !g.calls[g.kickTeam] && !this.popup) this.openKickChoice(g.kickTeam, app.humans[g.kickTeam]);
     if (g.phase === 'pat_choice' && g.isUser(g.possession) && !this.popup) this.openPATChoice(g.possession, app.humans[g.possession]);
@@ -915,6 +918,23 @@ export class UI {
     });
     if (list[0]) list[0].classList.add('sel');
   }
+
+  showIntro(g) {
+    this.hideIntro();
+    const A = g.teams[1].def, H = g.teams[0].def;
+    const ra = g.teams[1].ratings, rh = g.teams[0].ratings;
+    const wx = g.weather.label === 'clear' ? (g.settings.time === 'night' ? 'Clear night' : 'Clear skies') : g.weather.label === 'wind' ? `Windy · ${Math.round(g.weather.wind)} mph` : g.weather.label[0].toUpperCase() + g.weather.label.slice(1);
+    const sub = g.seasonGame ? (g.settings.playoff ? 'Playoffs' : 'Season game') : g.scenario === 'drill' ? 'Two-Minute Drill' : 'Exhibition';
+    const el = h('div', 'intro-card');
+    el.innerHTML = `<div class="ic-sub">${sub} · ${H.city} · ${wx}</div>
+      <div class="ic-row"><div class="ic-team">${badgeHTML(A)}<b>${A.city}</b><span>${A.name}</span><small>OVR ${ra.ovr}</small></div>
+      <div class="ic-at">@</div>
+      <div class="ic-team">${badgeHTML(H)}<b>${H.city}</b><span>${H.name}</span><small>OVR ${rh.ovr}</small></div></div>
+      <div class="ic-skip">Press any key to skip</div>`;
+    this.root.appendChild(el);
+    this.introEl = el;
+  }
+  hideIntro() { if (this.introEl) { this.introEl.remove(); this.introEl = null; } }
 
   showPause() {
     const app = this.app;

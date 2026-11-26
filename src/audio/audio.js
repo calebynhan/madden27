@@ -86,6 +86,21 @@ export class Audio {
   catch_() { this.noise(0.07, 1400, 1.2, 0.35, 'bandpass'); }
   snap() { this.noise(0.05, 900, 1, 0.25, 'bandpass'); }
   click() { this.tone(880, 0.05, 0.08, 'triangle'); }
+  // Stadium PA announcer through the browser's speech engine (optional).
+  say(text) {
+    if (!this.announcer || !text) return;
+    try {
+      const ss = window.speechSynthesis;
+      if (!ss) return;
+      ss.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = 1.04; u.pitch = 0.85; u.volume = Math.min(1, this.volume * 1.1);
+      const voices = ss.getVoices ? ss.getVoices() : [];
+      const v = voices.find((x) => /en[-_]US/i.test(x.lang) && /male|david|guy|daniel|alex|fred/i.test(x.name)) || voices.find((x) => /^en/i.test(x.lang));
+      if (v) u.voice = v;
+      ss.speak(u);
+    } catch { /* speech unavailable */ }
+  }
   horn() {
     if (!this.ctx) return;
     for (const f of [196, 247, 294]) this.tone(f, 1.2, 0.08, 'sawtooth');
