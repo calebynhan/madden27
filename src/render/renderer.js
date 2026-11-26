@@ -78,6 +78,10 @@ export class Renderer {
     this.landRing = makeRing(0xfff1a8);
     this.landRing.visible = false;
     this.scene.add(this.landRing);
+    // Gold ring under the receiver the one-button pass will go to
+    this.targetRing = makeRing(0xffd23f);
+    this.targetRing.visible = false;
+    this.scene.add(this.targetRing);
     this.lines = this.makeLines();
     this.artGroup = new THREE.Group();
     this.scene.add(this.artGroup);
@@ -416,6 +420,13 @@ export class Renderer {
       }
     }
     for (let i = ri; i < 2; i++) rings[i].visible = false;
+    const sg = sim && !view.replay && sim.kind === 'scrimmage' && sim.suggested && sim.qb && sim.qb.hasBall && !sim.thrown && !sim.qb.qbRunner
+      && (sim.playType === 'pass' || sim.playType === 'scramble') && game && game.isUser(sim.offIdx) && !game.isCoach(sim.offIdx) ? sim.suggested : null;
+    this.targetRing.visible = !!sg;
+    if (sg) {
+      this.targetRing.position.set(toX(sg.x), 0.045, toZ(sg.y));
+      this.targetRing.scale.setScalar(1.15 + 0.12 * Math.sin(performance.now() / 120));
+    }
     const fl = sim && sim.thrown && sim.ball.state === 'air' && sim.ball.flight && !sim.ball.pitch && sim.ball.flight.type !== 'away' && !sim.ball.flight.resolved ? sim.ball.flight : null;
     if (fl && view.userTeam !== null && view.userTeam !== undefined && sim.kind === 'scrimmage') {
       this.landRing.visible = true;
@@ -500,7 +511,8 @@ export class Renderer {
         m.fallSide = Math.max(-1, Math.min(1, (fx * e.vy - fy * e.vx) / vs));
         m.fallSet = true;
       } else if (anim !== 'fall' && anim !== 'down') m.fallSet = false;
-      m.animate(anim, sp, dt, { turnRate: m.turnRate, fallBack: m.fallBack, fallSide: m.fallSide, windup: e.windup });
+      const side = Math.cos(face) * (e.vy || 0) - Math.sin(face) * (e.vx || 0) >= 0 ? 1 : -1; // moving to his right (+1) or left
+      m.animate(anim, sp, dt, { turnRate: m.turnRate, fallBack: m.fallBack, fallSide: m.fallSide, windup: e.windup, side });
     }
   }
 

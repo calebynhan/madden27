@@ -3,9 +3,9 @@ import { TUNE } from './tune.js';
 import { FIELD_WIDTH, GRAVITY, BALL_CARRY_HEIGHT, GOAL_LINE_E, GOAL_LINE_W } from '../core/constants.js';
 import { clamp, dist } from '../core/util.js';
 
-const DIFF_USER_ACC = [0.7, 0.85, 1.0, 1.1];
+const DIFF_USER_ACC = [0.58, 0.74, 0.9, 1.05];
 const DIFF_CPU_ACC = [1.4, 1.15, 1.0, 0.9];
-const DIFF_USER_CATCH = [0.06, 0.03, 0, -0.03];
+const DIFF_USER_CATCH = [0.08, 0.05, 0.02, -0.02];
 const DIFF_CPU_CATCH = [-0.07, -0.03, 0, 0.02];
 
 export function throwSpeed(qb, type) {
@@ -237,8 +237,11 @@ export function throwBall(sim, qb, r, type, place) {
   // RPO pulled late: a lineman more than a yard downfield on a pass past the line is illegal.
   if (sim.rpoThrown && sim.stats.airYards > 0 && sim.off.some((o) => o.pos === 'OL' && sim.frame(o.x, o.y).f > 1.0)) sim.flags.push({ type: 'ineligible', team: qb.team });
   for (const dd of sim.def) dd.ballReactT = 0;
-  // Human offense: take control of the intended receiver.
-  if (r && sim.ctl(qb.team)) sim.setUser(qb.team, r);
+  // Human offense: take control of the intended receiver. He keeps running to the ball on his
+  // own until the player deliberately steers him (stick back to neutral, then a new push), so
+  // a key still held from moving the QB can't drag him off the throw.
+  if (sim.ball.flight) sim.ball.flight.human = !!qb.user;
+  if (r && sim.ctl(qb.team)) { sim.setUser(qb.team, r); r.autoTrack = true; }
 }
 
 export function throwAway(sim, qb, nearRec = null) {

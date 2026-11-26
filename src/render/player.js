@@ -2,6 +2,7 @@
 // Poses are flat vectors so state changes can crossfade smoothly.
 import * as THREE from 'three';
 import { athleteTemplate, makeAthlete, jerseyAtlas, pantsAtlas, tvNumberTexture, skinMaterial } from './athlete.js';
+import MOCAP from '../data/mocap.json';
 
 const SKIN = [0x8d5524, 0xc68642, 0xe0ac69, 0xf1c27d, 0x6b3f1f, 0xa0663a, 0x4a2a12];
 
@@ -192,6 +193,33 @@ function mesh(g, m, shadow = true) {
 }
 
 const smooth01 = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
+
+// ---------------------------------------------------------------- motion capture
+// Pose clips retargeted from the CMU motion capture database (tools/mocap/convert.mjs):
+// jog/run/sprint cycles, backpedal, defensive slides and an idle loop, each a list of
+// 21-channel pose vectors. Loops are sampled by gait phase, so stride rate follows speed.
+const MC = (MOCAP && MOCAP.clips) || {};
+const _ma = new Float32Array(N), _mb = new Float32Array(N);
+function sampleClip(clip, u, out) {
+  const fr = clip.frames, n = fr.length;
+  const t = clip.loop ? (u - Math.floor(u)) * n : Math.min(1, Math.max(0, u)) * (n - 1);
+  const i = Math.floor(t), f = t - i;
+  const a = fr[i % n], b = fr[clip.loop ? (i + 1) % n : Math.min(i + 1, n - 1)];
+  for (let k = 0; k < N; k++) out[k] = a[k] + (b[k] - a[k]) * f;
+  return out;
+}
+const sstep = (a, b, x) => smooth01((x - a) / (b - a));
+// Swap left and right (slides the other way)
+function mirrorPose(v) {
+  const sw = (i, j) => { const t = v[i]; v[i] = v[j]; v[j] = t; };
+  sw(L0X, L1X); sw(L0K, L1K); sw(L0Z, L1Z); v[L0Z] = -v[L0Z]; v[L1Z] = -v[L1Z];
+  sw(A0X, A1X); sw(A0E, A1E); sw(A0Z, A1Z); v[A0Z] = -v[A0Z]; v[A1Z] = -v[A1Z];
+  v[TWIST] = -v[TWIST]; v[TURN] = -v[TURN]; v[BRZ] = -v[BRZ]; v[BRY] = -v[BRY];
+}
+// Relaxed standing pose (slow speeds ease toward it)
+const STAND = new Float32Array(N);
+STAND[HIPY] = 0.99; STAND[LEAN] = 0.06; STAND[A0Z] = -0.12; STAND[A1Z] = 0.12; STAND[A0E] = -0.3; STAND[A1E] = -0.3;
+STAND[L0K] = 0.08; STAND[L1K] = 0.08; STAND[L0X] = -0.04; STAND[L1X] = -0.04;
 
 const TV_GEO = new THREE.PlaneGeometry(0.13, 0.087);
 const TOWEL_GEO = new THREE.PlaneGeometry(0.11, 0.24);
@@ -448,9 +476,39 @@ export class PlayerModel {
     const t = this.animClock;
     const T = this.tgt;
     T[BRX] = 0; T[BRY] = 0; T[BRZ] = 0; T[BPY] = 0;
+    // Motion-captured running: jog blending into a full run with speed (stride rate follows
+    // the gait phase), longer strides past the capture's speed, easing to standing when slow.
+    const mocapRun = (sp, carry) => {
+      const u = this.phase / (Math.PI * 2);
+      const kr = sstep(2.2, 6.0, sp);
+      sampleClip(MC.jog, u, _ma);
+      sampleClip(MC.run || MC.jog, u, _mb);
+      for (let i = 0; i < N; i++) T[i] = _ma[i] + (_mb[i] - _ma[i]) * kr;
+      const ks = sstep(5.5, 9.5, sp);
+      if (ks > 0) {
+        T[L0X] *= 1 + 0.22 * ks; T[L1X] *= 1 + 0.22 * ks; T[L0K] *= 1 + 0.1 * ks; T[L1K] *= 1 + 0.1 * ks;
+        T[A0X] *= 1 + 0.25 * ks; T[A1X] *= 1 + 0.25 * ks; T[LEAN] += 0.05 * ks;
+      }
+      const ka = sstep(0.4, 2.4, sp);
+      if (ka < 1) for (let i = 0; i < N; i++) T[i] = STAND[i] + (T[i] - STAND[i]) * ka;
+      if (carry) { T[A0X] = -0.45; T[A0Z] = -0.28; T[A0E] = -1.95; }
+      T[BRX] = 0; T[BRY] = 0; T[BPY] = 0;
+      T[BRZ] = Math.max(-0.32, Math.min(0.32, (ctx.turnRate || 0) * 0.07 * Math.min(1, sp / 8)));
+    };
+    // Backpedal: the captured backward run, sunk into a defensive back's low, chest-over-knees pedal
+    const mocapBack = (sp) => {
+      sampleClip(MC.backpedal, -this.phase / (Math.PI * 2), T);
+      const k = sstep(0.3, 2.0, sp);
+      T[HIPY] -= 0.07 * k; T[LEAN] += 0.3 * k;
+      T[L0X] -= 0.2 * k; T[L1X] -= 0.2 * k; T[L0K] += 0.4 * k; T[L1K] += 0.4 * k;
+      if (k < 1) for (let i = 0; i < N; i++) T[i] = STAND[i] + (T[i] - STAND[i]) * k;
+      T[BRX] = 0; T[BRY] = 0; T[BRZ] = 0; T[BPY] = 0;
+    };
     const run = (sp, carry = false, back = false) => {
       const k = Math.min(1, sp / 8);
       this.phase += dt * (5 + sp * 1.25) * (back ? -1 : 1);
+      if (MC.jog && !back) { mocapRun(sp, carry); return; }
+      if (MC.backpedal && back) { mocapBack(sp); return; }
       const ph = this.phase;
       const amp = 0.25 + k * 0.75;
       const s = Math.sin(ph);
@@ -476,6 +534,16 @@ export class PlayerModel {
     const shuffle = (sp) => {
       const k = Math.min(1, sp / 4.5);
       this.phase += dt * (8 + sp * 1.5);
+      if (MC.shuffleR) {
+        // Captured defensive slide (mirrored for the other direction), a little more upright
+        sampleClip(MC.shuffleR, this.phase / (Math.PI * 2) * 0.55, T);
+        if ((ctx.side || 1) < 0) mirrorPose(T);
+        T[LEAN] *= 0.75;
+        const ka = sstep(0.2, 1.8, sp);
+        if (ka < 1) for (let i = 0; i < N; i++) T[i] = STAND[i] + (T[i] - STAND[i]) * (0.35 + 0.65 * ka);
+        T[BRX] = 0; T[BRY] = 0; T[BRZ] = 0; T[BPY] = 0;
+        return;
+      }
       const s = Math.sin(this.phase);
       T[BPY] = Math.abs(Math.cos(this.phase)) * 0.05 * k;
       this.pose({ hipY: 0.9, lean: 0.42, legs: [[0.62, -0.95 + Math.max(0, s) * 0.35 * k, -0.12 - s * 0.24 * k], [0.62, -0.95 + Math.max(0, -s) * 0.35 * k, 0.12 - s * 0.24 * k]], arms: [[-0.55, -0.3, -1.0], [-0.55, 0.3, -1.0]], head: -0.25 });
@@ -603,7 +671,15 @@ export class PlayerModel {
         }
         break;
       }
-      case 'qb_gun': case 'idle': case 'hold': default: {
+      case 'idle':
+        if (MC.idle) {
+          // Captured standing: small natural weight shifts (each player offset in time)
+          sampleClip(MC.idle, (t + this.phase) / MC.idle.period, T);
+          T[BRX] = 0; T[BRY] = 0; T[BRZ] = 0; T[BPY] = 0;
+          break;
+        }
+      // falls through
+      case 'qb_gun': case 'hold': default: {
         const br = Math.sin(t * 2 + this.phase) * 0.02;
         const qb = anim === 'qb_gun';
         this.pose({ hipY: 0.98, lean: 0.12 + br, legs: [[0.15, -0.2, -0.1], [0.1, -0.15, 0.1]], arms: qb ? [[-0.9, -0.2, -1.2], [-0.9, 0.2, -1.2]] : [[0.1, -0.2, -0.4], [0.1, 0.2, -0.4]], head: -0.05 });

@@ -233,8 +233,10 @@ function blitz(sim, d, dt) {
     d.seek(p.x, p.y, 1, 0.1);
     return;
   }
-  if (qb) d.seek(qb.x, qb.y, 1, 0.1);
+  // Against a human quarterback the blitz gets home a beat later on the easier levels
+  if (qb) d.seek(qb.x, qb.y, qb.user ? HUMAN_BLITZ[sim.difficulty ?? 1] ?? 1 : 1, 0.1);
 }
+const HUMAN_BLITZ = [0.86, 0.93, 1.0, 1.0];
 
 function spy(sim, d, dt) {
   const qb = qbTarget(sim);

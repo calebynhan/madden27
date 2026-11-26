@@ -42,6 +42,8 @@ function navOf(ev) {
 export class UI {
   constructor(app) {
     this.app = app;
+    // Click (or tap) a receiver to throw to him
+    window.addEventListener('pointerdown', (ev) => this.onFieldClick(ev));
     this.root = document.getElementById('ui');
     this.screenEl = null;
     this.screenNav = null;
@@ -155,7 +157,7 @@ export class UI {
     const sec = (title, rows) => `<div><h3>${title}</h3>${rows.map(([a, k]) => `<div class="c"><span>${a}</span><span>${k}</span></div>`).join('')}</div>`;
     c.innerHTML =
       sec('Pre-snap (offense)', [['Snap ball', 'Space · A'], ['Hot route', 'H · Y'], ['Motion', 'M · LB'], ['Audible / flip', 'B · X'], ['Hard count', 'K'], ['Pass protection slide', 'L'], ['Show / hide play art', 'I · LT'], ['Timeout', 'T · Back'], ['Pause', 'Esc · Start']]) +
-      sec('Passing', [['Throw to receiver', '1–5 · A B X Y RB'], ['Pass type', 'tap = the right pass for the throw, hold = bullet'], ['Lob', 'Shift + number · LT + button'], ['Lead the pass', 'hold a direction while releasing'], ['Throw it away', 'X'], ['Scramble', 'move with WASD / stick'], ['Aggressive catch (traffic)', 'R · Y (hold)'], ['Possession catch (sideline)', 'C · A (hold)'], ['Run-after-catch (in stride)', 'E · X (hold)']]) +
+      sec('Passing', [['Throw to the highlighted (best open) receiver', 'Space (tap = right pass, hold = bullet)'], ['Change the highlighted receiver', 'Q / E'], ['Throw to a specific receiver', '1–5 · click him · A B X Y RB'], ['Pass type', 'tap = the right pass for the throw, hold = bullet'], ['Lob', 'Shift + number · LT + button'], ['Lead the pass', 'hold a direction while releasing'], ['Throw it away', 'X'], ['Scramble', 'move with WASD / stick'], ['Aggressive catch (traffic)', 'R · Y (hold)'], ['Possession catch (sideline)', 'C · A (hold)'], ['Run-after-catch (in stride)', 'E · X (hold)']]) +
       sec('Ball carrier', [['Move', 'WASD / Arrows · Left stick'], ['Sprint', 'Shift · RT'], ['Juke left / right', 'Q / E · Right stick ←/→'], ['Spin', 'R · B'], ['Stiff arm', 'F · A'], ['Truck', 'C · Right stick ↑'], ['Hurdle', 'V · Y'], ['Stutter step', 'X · Right stick ↓'], ['Dive / QB slide', 'Z · X'], ['Protect ball (hold)', 'G · RB']]) +
       sec('Option &amp; RPO', [['Zone read: keep it', 'move the stick at the mesh'], ['Speed option: pitch', 'X · LB'], ['RPO: pull and throw', 'read receiver\'s button before the handoff']]) +
       sec('Defense', [['Switch to defender nearest the ball', 'Tab · B'], ['Strafe (face the QB while moving)', 'hold C · hold LT'], ['Play the ball / interception', 'hold R · hold Y while the pass is in the air'], ['Dive tackle', 'Space · X'], ['Hit stick', 'F · Right stick ↑'], ['Strip ball', 'Q · RB'], ['Swat ball', 'E · X (ball in air)'], ['DL swim / bull rush', 'E / R · A / X'], ['Audible coverage', 'B · X (pre-snap)'], ['Assign defender (blitz, spy, zone, man)', 'H · Y (pre-snap)'], ['Coverage adjustments (shade, press, show blitz)', 'N · RB (pre-snap)'], ['Shift D-line', 'J · LB (pre-snap)']]) +
@@ -896,7 +898,9 @@ export class UI {
       if (u && u === sim.qb && sim.run && sim.run.optionLive && u.hasBall) html = `<div>${k('X', 'LB')} Pitch to the back · steer to keep it</div>`;
       else if (u && u === sim.qb && sim.rpo && sim.run && !sim.run.handoffDone && !sim.thrown && !sim.pendingThrow) html = `<div>RPO: ${k(String((sim.icons || []).findIndex((e) => e.tag === sim.rpo.tag) + 1), 'A')} Pull and throw · otherwise it's a handoff</div>`;
       else if (u && u === sim.qb && sim.run && sim.run.scheme === 'read' && !sim.run.handoffDone && !u.qbRunner) html = `<div>Zone read: move the stick at the mesh to keep it</div>`;
-      else if (u && u.hasBall && u === sim.qb && !sim.thrown && sim.playType !== 'run' && !u.qbRunner) html = `<div>${k('1-5', 'A B X Y RB')} Throw to that receiver — tap for a normal pass, hold for a bullet</div><div>${k('Shift', 'LT')} + receiver = lob · ${k('X', 'LB')} Throw away · move to scramble</div>`;
+      else if (u && u.hasBall && u === sim.qb && !sim.thrown && sim.playType !== 'run' && !u.qbRunner) html = pad
+        ? `<div>Gold ring = best open receiver · ${k('', 'A B X Y RB')} Throw to that receiver (hold = bullet)</div><div>${k('', 'LT')} + receiver = lob · ${k('', 'LB')} Throw away · move to scramble</div>`
+        : `<div>${k('Space', '')} Throw to the highlighted receiver (hold = bullet) · ${k('Q / E', '')} Change target</div><div>Or ${k('1-5', '')} / click a receiver to throw to him · ${k('Shift', '')} + throw = lob · ${k('X', '')} Throw away</div>`;
       else if (u && u.hasBall) html = `<div>${k('Q/E', 'RS ←→')} Juke ${k('R', 'B')} Spin ${k('F', 'A')} Stiff arm</div><div>${k('C', 'RS ↑')} Truck ${k('V', 'Y')} Hurdle ${k('Z', 'X')} Dive ${k('Shift', 'RT')} Sprint</div>`;
       else if (u && u.team === sim.offIdx && sim.thrown && sim.ball.state === 'air' && sim.target === u) html = `<div>Hold to catch: ${k('R', 'Y')} Aggressive ${k('C', 'A')} Possession ${k('E', 'X')} Run after catch</div>`;
       else if (u && u.team !== sim.possession) html = sim.thrown && sim.ball.state === 'air'
@@ -913,6 +917,34 @@ export class UI {
     }
     if (info !== this.infoKey) { this.infoKey = info; L.playinfo.innerHTML = info; }
     L.playinfo.classList.toggle('hidden', !info || !!app.view.replay);
+  }
+
+  onFieldClick(ev) {
+    const app = this.app, g = app.game;
+    if (!g || g.phase !== 'live' || this.popup || app.paused || app.view.replay) return;
+    if (ev.target && ev.target.closest && ev.target.closest('button, .panel, .menu, .screen')) return;
+    const sim = g.sim;
+    if (!sim || sim.kind !== 'scrimmage' || !sim.icons) return;
+    const t = sim.offIdx;
+    if (!g.isUser(t) || g.isCoach(t)) return;
+    const qb = sim.qb;
+    if (!qb || !qb.hasBall || sim.thrown || sim.pendingThrow || qb.qbRunner) return;
+    const rpoLive = !!(sim.rpo && sim.run && !sim.run.handoffDone);
+    if (sim.playType !== 'pass' && sim.playType !== 'scramble' && !rpoLive) return;
+    let best = -1, bd = 75;
+    sim.icons.forEach((e, i) => {
+      if (!e.isActive()) return;
+      for (const h of [2.7, 1.1]) {
+        const p = app.renderer.project(e.x, e.y, h);
+        if (!p.visible) continue;
+        const d = Math.hypot(p.x - ev.clientX, p.y - ev.clientY);
+        if (d < bd) { bd = d; best = i; }
+      }
+    });
+    const src = app.humans[t];
+    if (best < 0 || !src) return;
+    src.tap('pass' + (best + 1), 0.05);
+    ev.preventDefault();
   }
 
   paintIcons(g, inPlay) {
@@ -944,8 +976,16 @@ export class UI {
           const m = assist && this.openCache ? this.openCache[i] : null;
           const st = m === null || m === undefined ? '' : m > 0.4 ? 'open' : m < -0.05 ? 'covered' : '';
           const held = devs.some((d) => d.held.has('pass' + (i + 1)));
-          html += `<div class="ricon c${i + 1} ${blocking ? 'dim' : ''} ${st} ${held ? 'held' : ''}" style="left:${p.x}px;top:${p.y}px">${lbl}</div>`;
+          // The best open receiver (Space throws to him; Q/E change it)
+          const best = g.phase === 'live' && sim.qb.hasBall && sim.suggested === e;
+          const badge = best && !pad ? '<span class="key">SPACE</span>' : '';
+          html += `<div class="ricon c${i + 1} ${blocking ? 'dim' : ''} ${st} ${held ? 'held' : ''} ${best ? 'best' : ''}" style="left:${p.x}px;top:${p.y}px">${lbl}${badge}</div>`;
         });
+      }
+      // Blitz warning: a free rusher is closing on the human QB, get rid of it
+      if (offUser && g.phase === 'live' && sim.qb && sim.qb.hasBall && !sim.thrown && !sim.qb.qbRunner && (sim.pressure || 0) > 0.5 && (sim.playType === 'pass' || sim.playType === 'scramble')) {
+        const p = r.project(sim.qb.x, sim.qb.y, 3.1);
+        if (p.visible) html += `<div class="pressure" style="left:${p.x}px;top:${p.y}px">BLITZ — throw it!</div>`;
       }
       // Name tags for controlled players
       for (const t of [0, 1]) {

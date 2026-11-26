@@ -1,0 +1,9 @@
+{
+  "jog": { "src": "16_35", "type": "cycle" },
+  "run": { "src": "16_55", "type": "cycle" },
+  "sprint": { "src": "09_01", "type": "cycle" },
+  "backpedal": { "src": "76_11", "type": "cycle" },
+  "shuffleR": { "src": "78_26", "type": "cycle", "signal": "spread" },
+  "shuffleL": { "src": "78_27", "type": "cycle", "signal": "spread" },
+  "idle": { "src": "77_02", "type": "loop", "t0": 2.4, "t1": 5.4, "samples": 60 }
+}

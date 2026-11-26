@@ -223,3 +223,9 @@ td.dc { white-space: nowrap; width: 1%; }
 .ricon.covered { opacity: 0.55; }
 .ricon.held { transform: scale(1.4); z-index: 2; }
 #passmeter span { white-space: nowrap; left: 50%; transform: translateX(-50%); font-weight: 700; letter-spacing: 0.06em; color: #e9f1ff; text-shadow: 0 1px 3px #000; }
+
+/* One-button passing: the highlighted (best open) receiver */
+.ricon.best { transform: scale(1.32); z-index: 3; box-shadow: 0 0 0 3px #ffd23f, 0 0 18px 7px rgba(255, 210, 63, 0.9); }
+.ricon .key { position: absolute; top: 27px; left: 50%; transform: translateX(-50%); font-size: 9px; font-weight: 800; letter-spacing: 0.08em; background: rgba(10, 12, 18, 0.88); color: #ffd23f; padding: 2px 5px; border-radius: 4px; white-space: nowrap; pointer-events: none; }
+.pressure { position: absolute; transform: translate(-50%, -100%); background: #e53935; color: #fff; font-weight: 900; font-size: 12px; letter-spacing: 0.06em; padding: 4px 9px; border-radius: 6px; white-space: nowrap; box-shadow: 0 0 14px rgba(229, 57, 53, 0.8); animation: pressurePulse 0.45s ease-in-out infinite alternate; pointer-events: none; }
+@keyframes pressurePulse { from { transform: translate(-50%, -100%) scale(1); } to { transform: translate(-50%, -100%) scale(1.12); } }

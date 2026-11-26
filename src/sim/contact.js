@@ -3,6 +3,11 @@ import { clamp, dist } from '../core/util.js';
 import { BALL_CARRY_HEIGHT } from '../core/constants.js';
 import { TUNE } from './tune.js';
 
+// Pocket help for a human QB by difficulty (Rookie, Pro, All-Pro, Legend): shed-rate scale
+// and the block score at which a rusher who has the angle simply beats his man.
+const HUMAN_POCKET = [0.6, 0.8, 1.0, 1.1];
+const HUMAN_BEAT = [0.05, 0.13, 0.2, 0.24];
+
 const TAU = Math.PI * 2;
 function angDist(a, b) { let d = Math.abs(a - b) % TAU; return d > Math.PI ? TAU - d : d; }
 function rotateToward(a, target, rate) {
@@ -129,8 +134,10 @@ function updatePair(sim, o, d, dt) {
   o.face = o.blockAng; d.face = o.blockAng + Math.PI;
   o.anim = 'block'; d.anim = 'block';
   // Shed checks
-  if (angDist(o.blockAng, toG) < 0.75 && bs < (pass ? 0.2 : -0.15)) { shed(sim, o, d, 'beat'); return; }
+  if (angDist(o.blockAng, toG) < 0.75 && bs < (pass ? (sim.qb && sim.qb.user ? HUMAN_BEAT[sim.difficulty ?? 1] ?? 0.2 : 0.2) : -0.15)) { shed(sim, o, d, 'beat'); return; }
   let pShed = TUNE.passShedBase + Math.max(0, -bs) ** 2 * TUNE.passShedK + Math.max(0, db - ob) * 0.002;
+  // A human quarterback gets a cleaner pocket on the easier levels (line holds a bit longer)
+  if (pass && sim.qb && sim.qb.user) pShed *= HUMAN_POCKET[sim.difficulty ?? 1] ?? 1;
   const c = sim.carrier;
   if (c && c.team !== d.team && c !== sim.qb) {
     const dc = dist(c.x, c.y, d.x, d.y);

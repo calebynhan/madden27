@@ -637,7 +637,9 @@ function paFake(sim, e, dt) {
 function runRoute(sim, e, dt) {
   const r = e.route;
   // Targeted receiver tracks the ball.
-  if (sim.ball.state === 'air' && sim.target === e && sim.ball.flight && (sim.ball.flight.T - sim.ball.flight.t < 1.1 || !r || r.done)) {
+  // (On a human QB's throw he works back to the ball for the whole flight: a pass thrown
+  // before his break, or while he's still being jammed, doesn't sail past him.)
+  if (sim.ball.state === 'air' && sim.target === e && sim.ball.flight && (sim.ball.flight.T - sim.ball.flight.t < 1.1 || !r || r.done || sim.ball.flight.human)) {
     const fl = sim.ball.flight;
     const remain = Math.max(0.05, fl.T - fl.t);
     const d = dist(e.x, e.y, fl.tx, fl.ty);

@@ -4,10 +4,10 @@
 export const KEYMAP = {
   KeyW: ['up'], ArrowUp: ['up'], KeyS: ['down'], ArrowDown: ['down'], KeyA: ['left'], ArrowLeft: ['left'], KeyD: ['right'], ArrowRight: ['right'],
   ShiftLeft: ['sprint', 'lobmod'], ShiftRight: ['sprint', 'lobmod'],
-  Space: ['snap', 'tackle', 'kick', 'confirm'],
+  Space: ['snap', 'tackle', 'kick', 'confirm', 'passbest'],
   Digit1: ['pass1'], Digit2: ['pass2'], Digit3: ['pass3'], Digit4: ['pass4'], Digit5: ['pass5'],
   Numpad1: ['pass1'], Numpad2: ['pass2'], Numpad3: ['pass3'], Numpad4: ['pass4'], Numpad5: ['pass5'],
-  KeyQ: ['juke_l', 'strip'], KeyE: ['juke_r', 'swat', 'swim', 'catch_rac'], KeyR: ['spin', 'catch_aggr', 'bull'],
+  KeyQ: ['juke_l', 'strip', 'target_prev'], KeyE: ['juke_r', 'swat', 'swim', 'catch_rac', 'target_next'], KeyR: ['spin', 'catch_aggr', 'bull'],
   KeyF: ['stiff', 'hitstick', 'fair'], KeyC: ['truck', 'catch_poss', 'strafe'], KeyV: ['hurdle'], KeyZ: ['dive', 'kneel'],
   KeyX: ['pitch', 'stutter', 'throwaway'], KeyG: ['protect'], Tab: ['switch'],
   KeyH: ['hotroute'], KeyM: ['motion'], KeyB: ['audible'], KeyK: ['hardcount'], KeyL: ['protection'], KeyI: ['playart'],
@@ -45,6 +45,8 @@ export class InputSource {
   press(a, now) { if (!this.held.has(a)) { this.held.add(a); this.pressed.add(a); this.pressT.set(a, now); } }
   release(a, now) { if (this.held.has(a)) { this.held.delete(a); this.released.set(a, (now - (this.pressT.get(a) || now)) / 1000); } }
   consume() { this.pressed.clear(); this.released.clear(); }
+  // A synthetic button tap (clicking a receiver to throw to him)
+  tap(a, holdSec = 0.05) { this.released.set(a, holdSec); }
   holdTime(a, now) { return this.held.has(a) ? (now - (this.pressT.get(a) || now)) / 1000 : 0; }
   // Build the per-tick controller snapshot for the sim, rotated by camera direction.
   controller(camDir) {

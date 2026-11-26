@@ -22,21 +22,110 @@ export function userPassType(sim, qb, r, hold, ctl, moving) {
   return ev ? ev.type : 'touch';
 }
 
+// One-button passing: the game keeps the best target highlighted (the most open receiver,
+// weighted toward a gain and the sticks) and Space throws to him. Q/E switch the highlight
+// left/right across the field; a manual pick sticks for a moment. The highlight is sticky so
+// it doesn't flicker between near-equal reads.
+export function targetScore(sim, qb, r) {
+  if (!r || !r.isActive() || !r.eligible || !r.task || r.task.kind !== 'route') return -9;
+  const ev = evalTarget(sim, qb, r);
+  if (!ev) return -9;
+  const toGo = sim.firstDownX !== undefined ? (sim.firstDownX - sim.losX) * sim.dir : 10;
+  const p = sim.pressure || 0; // a free rusher closing in: the quick, open throw wins
+  if (r.jam > 0) return Math.min(ev.margin, 1.0) * 2.8 - 1.2; // still fighting a press jam
+  let s = Math.min(ev.margin, 1.0) * 2.8 + clamp(ev.depth, -4, 30) * 0.022 * (1 - 0.6 * p);
+  if (ev.depth >= toGo - 0.5) s += 0.25 * (1 - p);
+  s += p * (1.1 - ev.T) * 1.4;
+  return s;
+}
+
+// How soon an unblocked rusher gets to the QB (0 = no pressure, 1 = he's there)
+function pocketPressure(sim, qb) {
+  let tt = Infinity;
+  for (const d of sim.def) {
+    if (!d.isActive() || d.engaged) continue;
+    const dd = Math.hypot(d.x - qb.x, d.y - qb.y);
+    if (dd > 8) continue;
+    tt = Math.min(tt, Math.max(0, dd - 0.9) / Math.max(4, d.topSpeed * 0.9));
+  }
+  return clamp((0.95 - tt) / 0.6, 0, 1);
+}
+
+function updateSuggestion(sim, qb, ctl) {
+  const icons = sim.icons || [];
+  const cand = icons.filter((e) => e.isActive() && e.eligible && e.task && e.task.kind === 'route');
+  if (!cand.length) { sim.suggested = null; return; }
+  const step = ctl.pressed.has('target_next') ? 1 : ctl.pressed.has('target_prev') ? -1 : 0;
+  if (step) {
+    // Screen order from the camera behind the QB: right = +y when going +x
+    const order = cand.slice().sort((a, b) => (a.y - b.y) * sim.dir);
+    let i = order.indexOf(sim.suggested);
+    i = i < 0 ? (step > 0 ? 0 : order.length - 1) : (i + step + order.length) % order.length;
+    sim.suggested = order[i];
+    sim.suggestLock = sim.t + 1.6;
+    return;
+  }
+  if (sim.suggestLock && sim.t < sim.suggestLock && sim.suggested && sim.suggested.isActive()) return;
+  if (sim.suggestT !== undefined && sim.t - sim.suggestT < 0.1 && sim.suggested) return;
+  sim.suggestT = sim.t;
+  sim.pressure = pocketPressure(sim, qb);
+  let best = null, bs = -Infinity;
+  for (const r of cand) {
+    const sc = targetScore(sim, qb, r);
+    if (sc > bs) { bs = sc; best = r; }
+  }
+  const cur = sim.suggested && cand.includes(sim.suggested) ? sim.suggested : null;
+  const cs = cur ? targetScore(sim, qb, cur) : -Infinity;
+  sim.suggested = !cur || bs > cs + 0.15 || cs < -0.3 ? best : cur;
+}
+
 export function updateUser(sim, u, ctl, dt) {
   const moving = Math.hypot(ctl.mx, ctl.my) > 0.18;
   if (moving) u.idleT = 0; else u.idleT = (u.idleT || 0) + dt;
   if (u.hitStick > 0) u.hitStick -= dt;
   if (!u.isActive() || u.engaged) return;
+  // The receiver of a human throw runs to the ball himself until the player takes over
+  if (u.autoTrack) {
+    if (u.hasBall || !sim.thrown || sim.ball.state !== 'air') u.autoTrack = null;
+    else {
+      if (u.autoTrack === true) u.autoTrack = moving ? 'neutral' : 'armed';
+      if (u.autoTrack === 'neutral' && !moving) u.autoTrack = 'armed';
+      else if (u.autoTrack === 'armed' && moving) u.autoTrack = null;
+      if (u.autoTrack) { updateOffense(sim, u, dt); return; }
+    }
+  }
   const sprint = ctl.sprint;
   const manual = (scale = 1) => {
     const sp = u.topSpeed * (sprint ? 1 : 0.8) * scale * (u.hasBall ? 0.96 : 1);
     u.setDesired(ctl.mx * sp, ctl.my * sp);
   };
   const carrierTeam = sim.carrier ? sim.carrier.team : sim.possession;
+  // A Space press made once the QB has the ball arms the one-button pass (the snap press,
+  // even if it's released after the snap, never does)
+  if (u === sim.qb && u.hasBall && sim.phase !== 'presnap' && sim.t > 0.15 && ctl.pressed.has('passbest')) {
+    // The receiver highlighted when the button goes down is the one you get (and the
+    // highlight holds still while you're holding it)
+    sim.passArm = true;
+    sim.passPick = sim.suggested;
+    sim.suggestLock = sim.t + 3;
+  }
   // ---------------------------------------------------------------- QB in the pocket
   if (sim.kind === 'scrimmage' && u === sim.qb && u.hasBall && !u.qbRunner && sim.phase !== 'run') {
     if (sim.pendingThrow) { u.setDesired(u.vx * 0.5, u.vy * 0.5); u.anim = 'throw'; return; } // in the throwing motion
     if (sim.playType === 'pass' || sim.playType === 'scramble') {
+      updateSuggestion(sim, u, ctl);
+      // Space: throw to the highlighted receiver (armed only by a press made after the snap,
+      // so releasing the snap key doesn't fire a pass). Tap = the right pass, hold = bullet.
+      const hb = ctl.released.get('passbest');
+      if (hb !== undefined && sim.passArm) {
+        sim.passArm = false;
+        sim.suggestLock = 0;
+        const r = sim.passPick && sim.passPick.isActive() ? sim.passPick : sim.suggested;
+        if (r && r.isActive()) {
+          startThrow(sim, u, r, userPassType(sim, u, r, hb, ctl, moving), moving ? { x: ctl.mx, y: ctl.my } : null, hb >= BULLET_HOLD ? 0.5 : 1);
+          return;
+        }
+      }
       for (let i = 1; i <= 5; i++) {
         const hold = ctl.released.get('pass' + i);
         if (hold !== undefined) {
