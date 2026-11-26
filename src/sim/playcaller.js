@@ -34,6 +34,15 @@ export function fourthDownDecision(game, team) {
   const range = kickRange(game, team);
   const late = s.q >= 4 && s.clock < 300;
   const veryLate = s.q >= 4 && s.clock < 120;
+  // Overtime: trailing, a punt or a field goal that doesn't tie ends the game.
+  if (s.q >= 5 && game.ot) {
+    if (s.diff < 0) {
+      if (s.diff >= -3 && fgDist <= range && !(s.toGo <= 1.5 && s.toGoal <= 30)) return 'fg';
+      return 'go';
+    }
+    // Sudden death (both teams have had the ball): any score wins.
+    if (s.diff === 0 && game.ot.poss[s.opp] >= 1 && fgDist <= range) return 'fg';
+  }
   // Must-score situations
   if (late && s.diff < 0) {
     if (s.diff >= -3 && fgDist <= range && (veryLate || s.toGo > 3)) return 'fg';

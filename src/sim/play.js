@@ -195,10 +195,9 @@ export class PlaySim {
       u.setDesired(c.mx * u.topSpeed * 0.45, c.my * u.topSpeed * 0.45);
       u.integrate(dt);
       // Can't line up in the neutral zone beyond the ball by much.
+      // Lined up beyond the ball at the snap -> offside (getting back in time is legal)
       const fr = toFrame(this.losX, this.ballY0, this.dir, u.x, u.y);
-      if (fr.f < -0.6) { // crossed the line -> encroachment risk tracked by game
-        this.userOffside = true;
-      }
+      this.userOffside = fr.f < -0.6;
       u.y = clamp(u.y, 0.5, FIELD_WIDTH - 0.5);
       if (u.vx || u.vy) u.anim = 'run'; else u.anim = 'stance2';
     }
@@ -479,13 +478,26 @@ function buildResult(sim, info) {
     if ((c.contactX - r.endX) * ad > 0) r.endX = c.contactX;
   }
   // Safety / touchback in own end zone
-  if (!r.td && !r.incomplete && (info.reason === 'tackle' || info.reason === 'oob' || info.reason === 'oob_endzone')) {
+  if (r.td === null && !r.incomplete && (info.reason === 'tackle' || info.reason === 'oob' || info.reason === 'oob_endzone')) {
     const team = sim.possession;
     const ad = sim.attackDir(team);
     const ownGoal = ad > 0 ? GOAL_LINE_W : GOAL_LINE_E;
     if ((r.endX - ownGoal) * ad < 0) {
-      if (sim.possessionChangedInEndzone || r.turnover || sim.kind !== 'scrimmage') r.touchback = true;
-      else r.safety = 1 - team;
+      if (sim.kind === 'scrimmage') {
+        if (sim.possessionChangedInEndzone || r.turnover) r.touchback = true;
+        else r.safety = 1 - team;
+      } else if (team === sim.offIdx) {
+        r.safety = 1 - team; // kicking team (blocked punt) downed or out behind its own goal line
+      } else if (sim.possessionChangedInEndzone) {
+        r.touchback = true; // fielded in the end zone
+      } else {
+        // Fielded in the field of play and carried back in: a safety, except for the
+        // momentum exception (caught just outside the goal line), which keeps the catch spot.
+        const caught = sim.catchX ?? r.endX;
+        const depth = (caught - ownGoal) * ad;
+        if (depth < 4 && sim.returnStartT !== undefined && sim.t - sim.returnStartT < 1.2) r.endX = ownGoal + ad * Math.max(0.5, depth);
+        else r.safety = 1 - team;
+      }
     }
   }
   return r;

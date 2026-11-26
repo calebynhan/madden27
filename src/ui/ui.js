@@ -333,14 +333,23 @@ export class UI {
     if (app.halftime && this.screenNav) { if (nav) this.screenNav(nav, ev); return; }
     // Replay controls
     if (app.view.replay) { this.replayInput(ev, nav); return; }
-    if (ev.actions && ev.actions.includes('pause') && !this.popup) { app.togglePause(); return; }
+    // Esc inside the play list steps back to formations instead of pausing
+    const evTeam = app.teamOf(ev.source);
+    const inPlayList = g.phase === 'playcall' && evTeam !== null && this.pcState[evTeam] && !this.pcState[evTeam].done && this.pcState[evTeam].focus === 'plays';
+    if (ev.actions && ev.actions.includes('pause') && !this.popup && !(inPlayList && ev.actions.includes('back'))) { app.togglePause(); return; }
     if (this.popup) {
       if (this.popup.source && ev.source !== this.popup.source && app.humanCount() > 1) return;
       this.popupInput(ev, nav);
       return;
     }
-    const team = app.teamOf(ev.source);
+    const team = evTeam;
     if (team === null || team === undefined) return;
+    // Timeouts work from the play-call screen as well as at the line
+    if ((g.phase === 'playcall' || g.phase === 'presnap') && ev.actions && ev.actions.includes('timeout')) {
+      if (g.callTimeout(team)) this.toast(`Timeout — ${g.teams[team].def.name} (${g.timeouts[team]} left)`);
+      else if (g.timeouts[team] <= 0) this.toast('No timeouts left', 1.2);
+      return;
+    }
     // Play calling
     if (g.phase === 'playcall' && this.pcState[team] && !this.pcState[team].done) { this.playcallInput(team, ev, nav); return; }
     if (g.phase === 'post' && ev.actions) {
@@ -348,9 +357,6 @@ export class UI {
       if (ev.actions.includes('confirm') || ev.actions.includes('snap')) { g.phaseT = 99; return; }
     }
     if (g.phase === 'presnap' && g.sim) this.presnapInput(team, ev);
-    if ((g.phase === 'playcall' || g.phase === 'presnap') && ev.actions && ev.actions.includes('timeout')) {
-      if (g.callTimeout(team)) this.toast(`Timeout — ${g.teams[team].def.name} (${g.timeouts[team]} left)`);
-    }
   }
 
   // ------------------------------------------------------------------ popups
@@ -745,7 +751,8 @@ export class UI {
     if (this.popup && !(to === 'presnap' && from === 'presnap')) this.closePopup();
     if (to === 'presnap' && g.sim && g.sim.kind === 'scrimmage') {
       const ut = [0, 1].find((t) => g.isUser(t));
-      if (ut !== undefined) this.drawArt(this.app.humanCount() > 1 ? g.sim.offIdx : ut);
+      if (ut !== undefined && this.app.humanCount() === 1) this.drawArt(ut);
+      else this.app.renderer.clearArt();
     } else this.app.renderer.clearArt();
   }
 
@@ -812,7 +819,7 @@ export class UI {
     L.hints.classList.toggle('hidden', !html || !!app.view.replay);
     // Play info for the human
     let info = '';
-    if (sim && sim.kind === 'scrimmage' && userTeam !== undefined && (g.phase === 'presnap' || g.phase === 'live')) {
+    if (sim && sim.kind === 'scrimmage' && userTeam !== undefined && app.humanCount() === 1 && (g.phase === 'presnap' || g.phase === 'live')) {
       if (g.isUser(sim.offIdx)) info = `<b>${sim.offPlay.name}</b><br>${OFF_FORMATIONS[sim.offPlay.form].name}${sim.flip ? ' (flipped)' : ''}`;
       else info = `<b>${sim.defPlay.name}</b><br>${DEF_FORMATIONS[sim.defPlay.form].name} · ${sim.defPlay.cover}`;
     }
@@ -851,9 +858,9 @@ export class UI {
     if (html !== this.iconKey) { this.iconKey = html; L.icons.innerHTML = html; }
     L.icons.classList.toggle('hidden', !html);
     // Pass power meter while holding a pass key
-    const src = sim && g.isUser(sim.offIdx) ? this.app.humans[sim.offIdx] : null;
+    const devs = sim && g.isUser(sim.offIdx) ? this.app.devicesFor(sim.offIdx) : [];
     let hold = 0;
-    if (src && g.phase === 'live' && sim.qb && sim.qb.hasBall && !sim.thrown) for (let i = 1; i <= 5; i++) hold = Math.max(hold, src.holdTime('pass' + i, performance.now()));
+    if (devs.length && g.phase === 'live' && sim.qb && sim.qb.hasBall && !sim.thrown) for (const src of devs) for (let i = 1; i <= 5; i++) hold = Math.max(hold, src.holdTime('pass' + i, performance.now()));
     if (hold > 0.04) { L.passmeter.classList.remove('hidden'); L.passmeter.querySelector('i').style.width = `${Math.min(100, (hold / 0.45) * 100)}%`; }
     else L.passmeter.classList.add('hidden');
   }

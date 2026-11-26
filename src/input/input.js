@@ -103,6 +103,18 @@ export class Input {
       // Some embedded/sandboxed frames forbid the Gamepad API; keep the keyboard working.
       try { gps = (navigator.getGamepads && navigator.getGamepads()) || []; } catch { this.padsBlocked = true; gps = []; }
     }
+    // Pads that went to sleep or were unplugged stop driving anything (the keyboard takes over).
+    const live = new Set();
+    for (const gp of gps) if (gp && gp.connected) live.add(gp.index);
+    for (const p of this.pads) {
+      const gone = !live.has(p.index);
+      if (gone && !p.disconnected) {
+        p.axes.x = 0; p.axes.y = 0;
+        for (const a of [...p.held]) p.release(a, now);
+        this.emit({ type: 'paddisconnect', source: p });
+      }
+      p.disconnected = gone;
+    }
     for (let i = 0; i < gps.length; i++) {
       const gp = gps[i];
       if (!gp || !gp.connected) continue;

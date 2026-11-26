@@ -100,6 +100,7 @@ export class Game {
     this.phaseT = 0;
     this.calls = [null, null];
     this.sim = null;
+    this.presnapFoul = null;
     this.clockRunning = false;
     if (!this.isUser(kickTeam)) this.calls[kickTeam] = { kind: AI.kickoffChoice(this, kickTeam) };
     this.emit('phase', { phase: this.phase });
@@ -131,7 +132,9 @@ export class Game {
     this.phase = 'playcall';
     this.phaseT = 0;
     this.calls = [null, null];
+    this.callAt = [0, 0];
     this.sim = null;
+    this.presnapFoul = null;
     this.conversion = !!opts.conversion;
     this.playClock = opts.playClock ?? 40;
     this.betweenElapsed = 0;
@@ -161,6 +164,7 @@ export class Game {
   submitCall(team, call) {
     if (this.phase !== 'playcall') return false;
     this.calls[team] = call;
+    if (this.callAt) this.callAt[team] = this.betweenElapsed;
     this.tryStartPlay();
     return true;
   }
@@ -188,7 +192,10 @@ export class Game {
     this.phaseT = 0;
     const hurry = AI.wantsHurry(this, off);
     this.presnapWait = this.isUser(off) ? Infinity : (hurry ? 0.9 : this.isUser(def) ? 2.6 + this.rng.next() * 1.6 : 0.8 + this.rng.next() * 0.8);
+    // The offense is never charged for time the defense spent choosing its call.
+    if (this.callAt && this.callAt[def] > this.callAt[off]) this.playClock = Math.max(this.playClock, this.isUser(off) ? 15 : this.presnapWait + 1.5);
     // CPU hard count / false start
+    this.presnapFoul = null;
     if (!this.isUser(off) && !this.conversion && this.rng.chance(0.016)) this.presnapFoul = { type: 'false_start', team: off };
     else if (!this.isUser(def) && !this.conversion && this.rng.chance(0.011)) this.presnapFoul = { type: 'offside', team: def };
     this.emit('phase', { phase: 'presnap' });
@@ -209,6 +216,7 @@ export class Game {
     }
     this.phase = 'presnap';
     this.phaseT = 0;
+    this.presnapFoul = null;
     this.presnapWait = this.isUser(off) ? Infinity : 1.4;
     this.emit('phase', { phase: 'presnap', kick: true });
   }
@@ -221,7 +229,8 @@ export class Game {
     const off = this.sim.offIdx;
     // Accelerated clock runoff
     if (this.clockRunning && this.settings.accel && !this.conversion && this.sim.kind === 'scrimmage') {
-      const hurry = !this.isUser(off) && AI.wantsHurry(this, off);
+      // No-huddle: a team that needs to hurry (either side, human or CPU) only loses the time it actually used
+      const hurry = AI.wantsHurry(this, off);
       const target = 40 - (hurry ? 32 : this.settings.accelTo);
       const extra = Math.max(0, target - this.betweenElapsed);
       this.runClock(extra, true);
@@ -229,7 +238,7 @@ export class Game {
     }
     // Defensive offside (user lined up in the neutral zone)
     if (this.sim.userOffside) { this.sim.userOffside = false; return this.presnapPenalty({ type: 'offside', team: 1 - off }); }
-    if (this.presnapFoul) { const f = this.presnapFoul; this.presnapFoul = null; return this.presnapPenalty(f); }
+    if (this.presnapFoul) { const f = this.presnapFoul; this.presnapFoul = null; if (this.sim.kind === 'scrimmage') return this.presnapPenalty(f); }
     this.clockRunning = true;
     if (this.sim.kind === 'kickoff' || this.sim.kind === 'onside' || this.sim.kind === 'xp') this.clockRunning = false;
     this.sim.snap();
@@ -303,7 +312,7 @@ export class Game {
     this.betweenElapsed += dt;
     if (this.phase === 'playcall' || this.phase === 'presnap') {
       this.playClock -= dt;
-      if (this.clockRunning && !this.conversion) this.runClock(dt, true);
+      if (this.clockRunning && !this.conversion && this.betweenElapsed <= 40) this.runClock(dt, true);
       if (this.playClock <= 0 && this.phase === 'presnap' && this.sim && this.sim.kind === 'scrimmage') {
         this.presnapPenalty({ type: 'delay', team: this.possession });
       } else if (this.playClock <= -3 && this.phase === 'playcall') {
@@ -347,6 +356,7 @@ export class Game {
 
   endQuarterBetweenPlays() {
     this.sim = null;
+    this.presnapFoul = null;
     this.next = { type: 'quarter_end', resume: this.lastNextAction || { type: 'scrimmage' } };
     this.phase = 'quarter_break';
     this.phaseT = 0;
@@ -407,10 +417,10 @@ export class Game {
     // Two-minute warning reached during the play
     if (this.twoMinPending && !this.twoMinWarned[this.quarter]) this.twoMinuteWarning();
     // End of quarter after the play (PATs still happen)
-    if (this.clock <= 0 && this.next && this.next.type !== 'pat' && this.next.type !== 'final') {
+    if (this.clock <= 0 && this.next && !['pat', 'conversion', 'final'].includes(this.next.type)) {
       this.next = { type: 'quarter_end', resume: this.next };
     }
-    this.checkOTEnd();
+    this.checkOTEnd(this.next && this.next.type === 'pat' ? this.next.team : null);
     this.emit('result', { result: r, text: this.lastText });
   }
 
@@ -455,7 +465,7 @@ export class Game {
     const flags = [...r.flags];
     // Random line-play penalties (holding) tied to what happened on the play
     const sheds = r.events.filter((e) => e.type === 'shed').length;
-    if (!r.td || this.rng.chance(0.5)) {
+    if (r.td === null || this.rng.chance(0.5)) {
       const pHold = (s.playType === 'run' ? 0.017 : 0.014) + sheds * 0.003;
       if (this.rng.chance(pHold)) flags.push({ type: 'holding', team: off });
       if (s.playType !== 'run' && this.rng.chance(0.009)) flags.push({ type: 'def_holding', team: def });
@@ -494,7 +504,8 @@ export class Game {
     this.box.team[f.team].penYds += Math.abs(Math.round(yards));
     this.ballX = fromSpot ?? s.losX;
     if (fromSpot !== null && fromSpot !== undefined) this.ballX = clamp(fromSpot, GOAL_LINE_W + 1, GOAL_LINE_E - 1);
-    this.applyYardage(yards, auto1st);
+    if (f.type === 'dpi') { this.ballX = s.losX + yards * dir; this.firstDown(); }
+    else this.applyYardage(yards, auto1st);
     if (lossOfDown) { this.down++; }
     this.ballY = this.hashY(s.ballY0);
     if (this.down > 4) { this.turnoverOnDowns(); }
@@ -578,7 +589,7 @@ export class Game {
         text = `${entName(ru)} rushes ${dirTxt} for ${yardText(yards)}.`;
       }
     }
-    if (tackler && !r.td && pt !== 'sack') { box.p(tackler.id, tackler).tkl++; text += ` Tackle by ${entName(tackler)}.`; }
+    if (tackler && r.td === null && pt !== 'sack') { box.p(tackler.id, tackler).tkl++; text += ` Tackle by ${entName(tackler)}.`; }
     if (r.stats.fumbleBy) {
       const fb = byId(r.stats.fumbleBy);
       if (fb) box.p(fb.id, fb).fum++;
@@ -650,10 +661,24 @@ export class Game {
   processConversion(s, r) {
     const off = s.offIdx;
     const ts = this.box.team[off];
+    if (r.flags.length && r.flags[0].type === 'dpi' && r.td !== off) {
+      // Spot foul in the end zone: the try is replayed from the 1 (half the distance if already inside it).
+      const dir = this.attackDir(off), goal = this.oppGoal(off);
+      const toGoal = (goal - s.losX) * dir;
+      const spot = toGoal > 2 ? 1 : toGoal / 2;
+      this.box.team[1 - off].penalties++;
+      this.box.team[1 - off].penYds += Math.max(1, Math.round(toGoal - spot));
+      this.ballX = goal - dir * spot; this.ballY = MID_Y;
+      this.down = 1; this.lineToGain = goal;
+      this.lastText = 'PENALTY: Defensive pass interference. The try will be replayed.';
+      this.log.push(this.lastText);
+      this.emit('penalty', { type: 'dpi', team: 1 - off, yards: toGoal - spot, text: 'Defensive pass interference' });
+      this.next = { type: 'conversion' };
+      this.lastNextAction = this.next;
+      return;
+    }
     ts.twoAtt++;
-    let good = false;
-    if (!r.flags.length || r.flags[0].type !== 'dpi') good = r.td === off;
-    else good = true; // DPI on conversion: treat as converted (spot at 1 then likely score)
+    const good = r.td === off;
     if (good) { this.score[off] += 2; this.box.addScore(off, this.quarter, 2); ts.twoConv++; this.lastText = 'Two-point conversion is GOOD!'; }
     else if (r.td === 1 - off) { this.score[1 - off] += 2; this.box.addScore(1 - off, this.quarter, 2); this.lastText = 'Two-point try fails — returned for two points by the defense!'; }
     else this.lastText = 'Two-point conversion fails.';
@@ -747,6 +772,12 @@ export class Game {
     } else if (r.td === kt) {
       text = `Muffed punt recovered in the end zone by ${this.teams[kt].def.name} — TOUCHDOWN!`;
       this.scoreTD(kt);
+    } else if (r.safety !== null) {
+      const blocked = s.events.some((e) => e.type === 'blocked');
+      text = blocked && r.possession === kt ? 'Punt BLOCKED! Downed in the end zone — SAFETY!' : `${entName(returner)} is brought down in the end zone — SAFETY!`;
+      if (this.ot) { this.ot.poss[kt]++; if (r.possession === rt) this.ot.poss[rt]++; }
+      this.endDrive();
+      this.scoreSafety(r.safety);
     } else if (r.possession === kt && !r.touchback) {
       text = s.events.some((e) => e.type === 'blocked') ? 'Punt BLOCKED! Recovered by the kicking team.' : `Muffed punt! Recovered by ${this.teams[kt].def.name}.`;
       this.ballX = clamp(r.endX, GOAL_LINE_W + 0.5, GOAL_LINE_E - 0.5); this.ballY = this.hashY(r.endY);
@@ -878,6 +909,7 @@ export class Game {
       case 'scrimmage': this.setupScrimmage(); break;
       case 'kickoff': this.setupKickoff(n.team, { fromYL: n.safety ? 20 : 35, safety: n.safety }); break;
       case 'pat': this.setupPAT(n.team); break;
+      case 'conversion': this.setupScrimmage({ conversion: true }); break;
       case 'quarter_end': this.endQuarter(n.resume); break;
       case 'final': this.finalize(); break;
       default: this.setupScrimmage();
@@ -885,7 +917,7 @@ export class Game {
   }
 
   setupPAT(team) {
-    if (this.checkOTEnd(true)) return;
+    if (this.checkOTEnd(team, true)) return;
     this.possession = team;
     this.phase = 'pat_choice';
     this.phaseT = 0;
@@ -916,7 +948,7 @@ export class Game {
     if (q >= 4) {
       if (this.ot && !this.settings.playoff) return this.finalize();
       if (q === 4 && this.score[0] === this.score[1]) return this.startOT();
-      if (q >= 5 && this.score[0] === this.score[1] && this.settings.playoff) return this.nextOTPeriod(resume);
+      if (q >= 5 && this.settings.playoff && !this.otDecided()) return this.nextOTPeriod(resume);
       return this.finalize();
     }
     // Q1 -> Q2, Q3 -> Q4: switch ends, keep possession/down/distance
@@ -976,17 +1008,21 @@ export class Game {
   // Overtime end conditions (2025+ rules): the game ends as soon as one team
   // leads and the trailing team has already had a possession (this covers
   // both-teams-possess, sudden death, and defensive scores on the first drive).
-  checkOTEnd(beforePAT = false) {
+  // A try still to come for the trailing team can tie or win the game, so it is played.
+  checkOTEnd(patTeam = null, now = false) {
+    if (!this.otDecided(patTeam)) return false;
+    this.next = { type: 'final' };
+    if (now) this.finalize();
+    return true;
+  }
+
+  otDecided(patTeam = null) {
     if (!this.ot || this.over) return false;
     const [a, b] = this.score;
     if (a === b) return false;
     const trailing = a > b ? 1 : 0;
-    if (this.ot.poss[trailing] >= 1) {
-      this.next = { type: 'final' };
-      if (beforePAT) this.finalize();
-      return true;
-    }
-    return false;
+    if (patTeam === trailing) return false;
+    return this.ot.poss[trailing] >= 1;
   }
 
   finalize() {

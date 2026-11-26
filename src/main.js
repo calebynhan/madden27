@@ -56,7 +56,34 @@ class App {
   league() { return this.seasonLeague || defaultLeague(); }
   specialPlay(kind) { return SPECIAL_OFF[kind]; }
   humanCount() { return this.humans.filter(Boolean).length; }
-  teamOf(src) { const i = this.humans.indexOf(src); return i >= 0 ? i : null; }
+  teamOf(src) {
+    const i = this.humans.indexOf(src);
+    if (i >= 0) return i;
+    for (let t = 0; t < 2; t++) if (this.humans[t] && this.devicesFor(t).includes(src)) return t;
+    return null;
+  }
+
+  // Devices that drive a human team: in a one-player game every connected device works
+  // (keyboard and any pad); otherwise the assigned device, or the keyboard if that pad dropped out.
+  devicesFor(tm) {
+    const src = this.humans[tm];
+    if (!src) return [];
+    if (this.humanCount() === 1) return this.input.sources().filter((s) => !s.disconnected);
+    if (src.disconnected && !this.humans.includes(this.input.keyboard)) return [this.input.keyboard];
+    return [src];
+  }
+
+  controllerFor(tm) {
+    const cam = this.view.camDir;
+    const devs = this.devicesFor(tm);
+    if (devs.length <= 1) return (devs[0] || this.humans[tm]).controller(cam);
+    const cs = devs.map((d) => d.controller(cam));
+    let best = cs[0], bm = -1;
+    for (const c of cs) { const m = Math.hypot(c.mx, c.my); if (m > bm) { bm = m; best = c; } }
+    const held = new Set(), pressed = new Set(), released = new Map();
+    for (const c of cs) { c.held.forEach((a) => held.add(a)); c.pressed.forEach((a) => pressed.add(a)); c.released.forEach((v, k) => released.set(k, v)); }
+    return { ...best, sprint: cs.some((c) => c.sprint), held, pressed, released, color: this.humans[tm].color };
+  }
 
   // ------------------------------------------------------------------ attract mode
   startAttract() {
@@ -230,9 +257,9 @@ class App {
         this.acc += dt * (this.game.settings.gameSpeed || 1);
         let steps = 0;
         while (this.acc >= DT && steps < 8) {
-          for (const tm of [0, 1]) if (this.humans[tm]) this.game.controllers[tm] = this.humans[tm].controller(this.view.camDir);
+          for (const tm of [0, 1]) if (this.humans[tm]) this.game.controllers[tm] = this.controllerFor(tm);
           this.game.update(DT);
-          for (const s of this.humans) if (s) s.consume();
+          for (const s of this.input.sources()) s.consume();
           this.acc -= DT;
           steps++;
         }
