@@ -109,6 +109,8 @@ const BLOCK_KINDS = new Set(['passblock', 'runblock', 'pull', 'lead', 'stalk', '
 export function updateOffense(sim, e, dt) {
   const t = e.task;
   if (!t) return;
+  // Anyone holding the ball (other than a QB still in the pocket) runs with it.
+  if (e.hasBall && (e.pos !== 'QB' || e.qbRunner || sim.phase === 'run')) { e.blocking = false; return runnerAI(sim, e, dt); }
   e.blocking = BLOCK_KINDS.has(t.kind) && !(t.kind === 'pull' && !t.turned) && !(t.kind === 'lead' && sim.frame(e.x, e.y).f < -1.5);
   if (t.kind === 'screenblock' && sim.t < 1.4) e.blocking = false;
   if (sim.carrier && sim.carrier.team === e.team && sim.carrier !== e && e.pos !== 'QB' && (sim.phase === 'run' || sim.carrier.team !== sim.offIdx)) e.blocking = true;
@@ -234,30 +236,44 @@ function cpuPassDecision(sim, qb, dt) {
   const pressure = sim.pressure || 0;
   const underFire = sim.def.some((d) => d.isActive() && !d.engaged && dist(d.x, d.y, qb.x, qb.y) < 2.2);
   // Evaluate current and previous reads (QBs come back to earlier reads quickly).
-  let best = null;
+  // Each option is valued as completion chance x expected yards (air + room to run),
+  // with the line to gain dominating on third and fourth down.
   const down = sim.game ? sim.game.down : 1;
-  const toGo = sim.lineToGain !== null && sim.lineToGain !== undefined ? (sim.lineToGain - sim.losX) * sim.dir : 10;
+  const toGo = sim.lineToGain !== null && sim.lineToGain !== undefined ? Math.max(0.5, (sim.lineToGain - sim.losX) * sim.dir) : 10;
   const hailMary = play.tags.includes('hailmary');
+  const lateDown = down >= 3;
+  const valueOf = (r, i) => {
+    const ev = evalTarget(sim, qb, r);
+    if (!ev) return null;
+    const m = ev.margin;
+    // Fitted to simulated outcomes: depth drives completion odds; separation adds a little,
+    // and genuinely covered throws (margin well below zero) fall off sharply.
+    const pC = clamp(0.86 - Math.max(0, ev.depth - 5) * 0.012 + clamp(m, -0.25, 0.4) * 0.25 - Math.max(0, -0.25 - m) * 0.9 - (ev.type === 'lob' ? 0.08 : 0), 0.03, 0.95);
+    const yac = clamp(m * 2.6 + 1.0, 0, 5);
+    const exp = ev.depth + yac;
+    let val;
+    if (lateDown) {
+      const reach = exp >= toGo ? 1 + Math.min(0.4, (exp - toGo) / 25) : clamp((exp - toGo * 0.45) / (toGo * 0.55), 0, 1) * 0.3;
+      val = pC * (0.2 + reach) - (1 - pC) * 0.05;
+    } else {
+      val = pC * clamp(exp / 9, -0.3, 1.7) - (1 - pC) * 0.12;
+    }
+    if (ev.depth < 0 && !play.tags.includes('screen')) val -= 0.06;
+    if (hailMary) val += 0.6;
+    val -= i * 0.015;
+    return { r, ev, val, pC };
+  };
+  let best = null;
   for (let i = 0; i <= readIdx; i++) {
     const r = reads[i];
     if (r.route && r.route.delay && sim.t < r.route.delay + 0.2) continue;
-    const ev = evalTarget(sim, qb, r);
-    if (!ev) continue;
-    let score = ev.margin;
-    // Value: yards gained vs line to gain on late downs
-    const gain = ev.depth;
-    if (down >= 3 && gain < toGo) score -= (underFire ? 0.04 : 0.14) * Math.min(1, (toGo - gain) / 5);
-    if (gain > 15) score += 0.08;
-    score += clamp(gain / 25, -0.15, 0.2); // QBs prefer throws that gain real yardage
-    if (ev.type === 'lob' && !hailMary) score -= 0.16; // deep shots need a clear window
-    if (gain < 0 && !play.tags.includes('screen')) score -= 0.08;
-    if (hailMary) score += 0.5;
-    score -= i * 0.02;
-    if (!best || score > best.score) best = { r, ev, score };
+    const o = valueOf(r, i);
+    if (o && (!best || o.val > best.val)) best = o;
   }
-  const thresholdBase = 0.2 - (awr - 70) * 0.004;
-  const thr = Math.max(hailMary ? -1 : 0.02, thresholdBase - elapsed * 0.06 - (underFire ? 0.12 : 0));
-  if (best && best.score > thr) {
+  const smart = (awr - 70) * 0.004;
+  const thr = Math.max(hailMary ? -1 : 0.14, 0.54 - smart - elapsed * 0.2 - (underFire ? 0.25 : 0));
+  if (best && best.val > thr && best.pC > (underFire ? 0.3 : 0.42)) {
+    sim.throwMargin = best.ev.margin;
     throwBall(sim, qb, best.r, best.ev.type, null);
     return;
   }
@@ -269,16 +285,20 @@ function cpuPassDecision(sim, qb, dt) {
   if (underFire || allRead || hot) {
     // Checkdown: best of everyone
     let cd = null;
-    for (const r of reads) {
-      const ev = evalTarget(sim, qb, r);
-      if (ev && (!cd || ev.margin > cd.ev.margin)) cd = { r, ev };
+    for (let i = 0; i < reads.length; i++) {
+      const o = valueOf(reads[i], 0);
+      if (o && (!cd || o.pC * 0.6 + o.val * 0.4 > cd.pC * 0.6 + cd.val * 0.4)) cd = o;
     }
-    if (cd && cd.ev.margin > (hot || underFire ? -0.2 : internalClock ? -0.05 : 0.03)) { throwBall(sim, qb, cd.r, cd.ev.type, null); return; }
+    if (cd && cd.pC > (hot || underFire ? 0.3 : internalClock ? 0.45 : 0.55)) { sim.throwMargin = cd.ev.margin; throwBall(sim, qb, cd.r, cd.ev.type, null); return; }
     // Scramble if there is room, otherwise throw it away or take the sack.
     const mobile = qb.r.spd > 78;
     const room = !sim.def.some((d) => d.isActive() && dist(d.x, d.y, qb.x + sim.dir * 3, qb.y) < 3);
     if ((mobile || elapsed > 2.6) && room && sim.rng.chance(dt * (mobile ? 3.0 : 1.2))) { qb.qbRunner = true; sim.phase = 'run'; sim.playType = 'scramble'; return; }
-    if (underFire && elapsed > 0.6 && sim.rng.chance(dt * (0.8 + (awr - 60) * 0.035))) {
+    // Out of the pocket (bootleg/rollout) or past the internal clock with pressure
+    // coming: smart QBs live to play another down.
+    const outsidePocket = Math.abs(sim.frame(qb.x, qb.y).l) > 3.2;
+    const bailRate = (underFire ? 1.0 : hot ? 0.8 : 0) + (internalClock && (outsidePocket || hot) ? 1.2 : 0);
+    if (bailRate > 0 && elapsed > 0.5 && sim.rng.chance(dt * bailRate * (0.7 + (awr - 60) * 0.02))) {
       const outside = Math.abs(sim.frame(qb.x, qb.y).l) > 3.2;
       // Throw it at the feet of the nearest receiver (no grounding) or out of bounds.
       const nearRec = reads.slice().sort((a, b) => dist(a.x, a.y, qb.x, qb.y) - dist(b.x, b.y, qb.x, qb.y))[0];

@@ -2,11 +2,13 @@
 import { Game } from '../src/sim/game.js';
 import { defaultLeague } from '../src/data/league.js';
 import { RNG } from '../src/core/rng.js';
+import { TUNE } from '../src/sim/tune.js';
+if (process.env.TUNE) Object.assign(TUNE, JSON.parse(process.env.TUNE));
 
 const N = parseInt(process.argv[2] || '6', 10);
 const qlen = parseFloat(process.argv[3] || '15');
 const teams = defaultLeague();
-const agg = { games: 0, pts: 0, plays: 0, passAtt: 0, passCmp: 0, passYds: 0, sacks: 0, sackYds: 0, ints: 0, rushAtt: 0, rushYds: 0, fumLost: 0, punts: 0, puntYds: 0, fga: 0, fgm: 0, xpa: 0, xpm: 0, third: 0, thirdConv: 0, fourth: 0, fourthConv: 0, penalties: 0, tds: 0, two: 0, twoC: 0, kr: 0, krYds: 0, tb: 0, firstDowns: 0, ot: 0, ties: 0 };
+const agg = { ta: 0, games: 0, pts: 0, plays: 0, passAtt: 0, passCmp: 0, passYds: 0, sacks: 0, sackYds: 0, ints: 0, rushAtt: 0, rushYds: 0, fumLost: 0, punts: 0, puntYds: 0, fga: 0, fgm: 0, xpa: 0, xpm: 0, third: 0, thirdConv: 0, fourth: 0, fourthConv: 0, penalties: 0, tds: 0, two: 0, twoC: 0, kr: 0, krYds: 0, tb: 0, firstDowns: 0, ot: 0, ties: 0 };
 const t0 = Date.now();
 let errors = 0;
 for (let g = 0; g < N; g++) {
@@ -34,6 +36,7 @@ for (let g = 0; g < N; g++) {
   if (game.ot) agg.ot++;
   if (game.score[0] === game.score[1]) agg.ties++;
   console.log(`G${g}: ${game.teams[0].def.abbr} ${game.score[0]} - ${game.score[1]} ${game.teams[1].def.abbr}  (steps ${steps}${game.ot ? ', OT' : ''})`);
+  agg.ta += game.log.filter((l) => l.includes('throws it away')).length;
   if (process.env.LOG) console.log(game.log.join('\n'));
 }
 const G = Math.max(1, agg.games * 2);
@@ -42,6 +45,7 @@ console.log(`\n=== ${agg.games} games, ${(Date.now() - t0) / 1000}s, errors ${er
 console.log(`Per team per game (NFL 2025 ref in brackets):`);
 console.log(` Points ${f(agg.pts / G)} [23.0]   Plays ${f(agg.plays / G)} [~61]   First downs ${f(agg.firstDowns / G)} [~19]`);
 console.log(` Pass att ${f(agg.passAtt / G)} [32.1]  Cmp% ${f(100 * agg.passCmp / Math.max(1, agg.passAtt))} [64.2]  Y/A ${f((agg.passYds) / Math.max(1, agg.passAtt), 2)} [~7.0]`);
+console.log(` Sack% ${f(100 * agg.sacks / Math.max(1, agg.passAtt + agg.sacks))} [~6.6]  Throwaways/team ${f(agg.ta / G, 2)} [~1.2]`);
 console.log(` Sacks ${f(agg.sacks / G, 2)} [~2.3]  INT ${f(agg.ints / G, 2)} [0.70]  Fum lost ${f(agg.fumLost / G, 2)} [0.46]`);
 console.log(` Rush att ${f(agg.rushAtt / G)} [26.8]  YPC ${f(agg.rushYds / Math.max(1, agg.rushAtt), 2)} [4.4]`);
 console.log(` Punts ${f(agg.punts / G, 2)} [~3.5]  Avg ${f(agg.puntYds / Math.max(1, agg.punts))} [~48]  FG ${agg.fgm}/${agg.fga} ${f(100 * agg.fgm / Math.max(1, agg.fga))}% [85.6]  XP ${f(100 * agg.xpm / Math.max(1, agg.xpa))}% [95.9]`);

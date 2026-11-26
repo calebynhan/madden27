@@ -2,6 +2,7 @@
 import { FIELD_WIDTH } from '../core/constants.js';
 import { clamp, dist } from '../core/util.js';
 import { TUNE } from './tune.js';
+import { runnerAI } from './runner.js';
 import { zoneSpec, zoneLandmark, resolveManTarget, gapLateral } from './align.js';
 
 // CPU defensive awareness multiplier vs a human offense (rookie..legend).
@@ -92,7 +93,9 @@ export function updateDefense(sim, d, dt) {
     if (!sim.runRecognizedT) sim.runRecognizedT = sim.t;
     const since = sim.t - sim.runRecognizedT;
     const afterCatch = sim.thrown;
-    const react = afterCatch ? 0.15 + (99 - (d.r.awr ?? 60)) * 0.004 : d.reactRun;
+    // Defenders who already broke on the thrown ball keep coming; others need a beat.
+    const sawThrow = afterCatch && d.ballReactT && d.ballReactT <= (sim.catchT ?? sim.t);
+    const react = afterCatch ? (sawThrow ? 0 : 0.12 + (99 - (d.r.awr ?? 60)) * 0.003) : d.reactRun;
     if (since < react) {
       // Still executing assignment (play-action fooled, coverage carrying receivers)
       return execTask(sim, d, dt);
@@ -181,7 +184,7 @@ function manCover(sim, d, dt) {
     d.task = zoneTask(sim, 'hole', sim.nums.strong); return zoneCover(sim, d, dt);
   }
   const mcv = d.r.mcv ?? 50;
-  let delay = clamp(0.3 - (mcv - 50) * 0.0042 + ((r.r.rte ?? 60) - 70) * 0.0032, 0.07, 0.45) * (d.react || 1);
+  let delay = clamp(0.3 - (mcv - 50) * 0.0042 + ((r.r.rte ?? 60) - 70) * 0.0032, 0.07, 0.45) * (d.react || 1) * TUNE.manDelayK;
   if (d.beat) delay += 0.15;
   const L = lagged(r, delay);
   const rf = sim.frame(L.x, L.y);
@@ -215,7 +218,7 @@ function zoneCover(sim, d, dt) {
   const dropT = 0.25 + zs.depth / 7;
   d.anim = 'backpedal';
   // Find threats (seen with a reaction lag that depends on zone skill)
-  const zlag = clamp(0.32 - ((d.r.zcv ?? 60) - 50) * 0.004, 0.08, 0.4) * (d.react || 1);
+  const zlag = clamp(0.32 - ((d.r.zcv ?? 60) - 50) * 0.004, 0.08, 0.4) * (d.react || 1) * TUNE.zoneLagK;
   let threat = null, tscore = -Infinity;
   for (const r of sim.off) {
     if (!r.eligible || !r.route || r.task.kind !== 'route') continue;
@@ -244,8 +247,8 @@ function zoneCover(sim, d, dt) {
       const vx = qf.f - pf.f, vy = qf.l - pf.l;
       const vl = Math.hypot(vx, vy) || 1;
       // Blend between the landmark and a spot under the route (zones don't man up).
-      tf = (pf.f + (vx / vl) * 1.6) * 0.6 + lmf.f * 0.4;
-      tl = (pf.l + (vy / vl) * 1.6) * 0.6 + lmf.l * 0.4;
+      tf = (pf.f + (vx / vl) * 1.6) * TUNE.zoneBlend + lmf.f * (1 - TUNE.zoneBlend);
+      tl = (pf.l + (vy / vl) * 1.6) * TUNE.zoneBlend + lmf.l * (1 - TUNE.zoneBlend);
       tf = clamp(tf, lmf.f - zs.rf, lmf.f + zs.rf);
       tl = clamp(tl, lmf.l - zs.rx * 1.1, lmf.l + zs.rx * 1.1);
     }
@@ -264,7 +267,7 @@ function zoneCover(sim, d, dt) {
 function playBallInAir(sim, d, dt) {
   const fl = sim.ball.flight;
   if (!fl) return execTask(sim, d, dt);
-  if (!d.ballReactT) d.ballReactT = sim.t + (0.12 + (99 - (d.r.awr ?? 60)) * 0.0045 + (d.task.kind === 'man' ? 0.1 : 0)) * (d.react || 1);
+  if (!d.ballReactT) d.ballReactT = sim.t + (0.08 + (99 - (d.r.awr ?? 60)) * 0.0035 + (d.task.kind === 'man' ? 0.08 : 0)) * (d.react || 1);
   if (sim.t < d.ballReactT || d.task.kind === 'rush' || d.task.kind === 'blitz') {
     if (d.task.kind === 'rush' || d.task.kind === 'blitz') { // rushers peel back toward the catch
       if (sim.t > d.ballReactT + 0.3) return d.seek(fl.tx, fl.ty, 0.9, 1);
@@ -286,29 +289,40 @@ function playBallInAir(sim, d, dt) {
 export function pursue(sim, d, c, dt) {
   d.anim = 'run';
   const dd = dist(d.x, d.y, c.x, c.y);
-  // Estimate intercept time
-  let T = dd / Math.max(1, d.topSpeed);
-  T = clamp(T, 0, 1.6);
-  const pur = d.r.pur ?? 60;
-  const angleQual = 0.35 + pur * 0.0065; // 0.35..1.0 of the ideal lead
+  const csp = Math.hypot(c.vx, c.vy);
   const ad = sim.attackDir(c.team);
-  // Forward lead is always taken; lateral lead only when the runner is coming
-  // toward us — backside pursuers stay square to take away the cutback.
-  const latTowardUs = Math.sign(c.vy) === Math.sign(d.y - c.y);
-  const latLead = latTowardUs ? angleQual : angleQual * 0.35;
-  let tx = c.x + c.vx * T * angleQual;
-  let ty = c.y + c.vy * T * latLead;
-  // Keep inside-out leverage: aim a little toward the carrier's goal side
-  tx += ad * Math.min(1.5, dd * 0.08);
+  // Is this defender trailing the play (behind the carrier relative to his path)?
+  const behind = csp > 2 && ((d.x - c.x) * c.vx + (d.y - c.y) * c.vy) / (csp * Math.max(0.01, dd)) < -0.35;
+  let tx, ty;
+  if (behind) {
+    // Chase straight down the carrier's line; leading him from behind only loses ground.
+    tx = c.x + c.vx * 0.12; ty = c.y + c.vy * 0.12;
+  } else {
+    let T = dd / Math.max(1, d.topSpeed);
+    T = clamp(T, 0, 1.6);
+    const pur = d.r.pur ?? 60;
+    const angleQual = 0.35 + pur * 0.0065; // 0.35..1.0 of the ideal lead
+    // Forward lead is always taken; lateral lead only when the runner is coming
+    // toward us — backside pursuers stay square to take away the cutback.
+    const latTowardUs = Math.sign(c.vy) === Math.sign(d.y - c.y);
+    const latLead = latTowardUs ? angleQual : angleQual * 0.35;
+    tx = c.x + c.vx * T * angleQual;
+    ty = c.y + c.vy * T * latLead;
+    // Keep inside-out leverage: aim a little toward the carrier's goal side
+    tx += ad * Math.min(1.5, dd * 0.08);
+  }
   ty = clamp(ty, -1, FIELD_WIDTH + 1);
-  d.seek(tx, ty, 1, 0.15);
-  // Dive at a runner who is about to get away.
-  if (!d.lunge && d.tackleCd <= 0 && dd > 1.25 && dd < 2.3 && !d.user) {
+  // Rally: defenders close hard on a fresh catch (effort and angles).
+  const rally = sim.catchT !== undefined && sim.t - sim.catchT < 2.0 && dd < 14 ? 1.05 : 1;
+  d.speedCap = rally;
+  d.seek(tx, ty, rally, 0.15);
+  // Dive at a runner who is about to get away (only from realistic range).
+  if (!d.lunge && d.tackleCd <= 0 && dd > 1.25 && dd < 1.85 && !d.user) {
     const closing = ((c.x - d.x) * (d.vx - c.vx) + (c.y - d.y) * (d.vy - c.vy)) / dd;
-    if (closing < 1.0 && sim.rng.chance(0.5)) {
-      d.lunge = 0.3;
-      const a = Math.atan2(c.y + c.vy * 0.2 - d.y, c.x + c.vx * 0.2 - d.x);
-      const sp = Math.max(d.speed, d.topSpeed * 0.9) * 1.12;
+    if (closing < 0.8 && closing > -2.5 && sim.rng.chance(0.55)) {
+      d.lunge = 0.28;
+      const a = Math.atan2(c.y + c.vy * 0.15 - d.y, c.x + c.vx * 0.15 - d.x);
+      const sp = Math.max(d.speed, d.topSpeed * 0.9) * 1.15;
       d.vx = Math.cos(a) * sp; d.vy = Math.sin(a) * sp;
       d.setDesired(d.vx, d.vy);
       d.anim = 'dive';
@@ -325,7 +339,7 @@ function chaseBall(sim, d) {
 function escortDef(sim, d, dt) {
   // Defense has the ball (interception/fumble return): block the nearest pursuer.
   const c = sim.carrier;
-  if (d === c) return;
+  if (d === c) { d.blocking = false; return runnerAI(sim, d, dt); }
   d.blocking = true;
   const opp = sim.ents.filter((o) => o.team !== d.team && o.isActive() && !o.engaged);
   let best = null, bs = Infinity;

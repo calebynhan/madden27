@@ -42,7 +42,7 @@ export const ROUTES = {
   out_up: { name: 'Out & Up', pts: [[5, 0], [5.5, -2.5], [45, -4]], pause: { 1: 0.15 }, depthClass: 'deep' },
   hitch_go: { name: 'Hitch & Go', pts: [[5, 0], [4.6, 0], [45, -1]], pause: { 1: 0.2 }, depthClass: 'deep' },
   post_corner: { name: 'Post Corner', pts: [[10, 0], [14, 4], [30, -9]], depthClass: 'deep' },
-  leak: { name: 'Leak', pts: [[1.5, 4], [8, 12], [14, 32]], delay: 0.9, depthClass: 'medium' },
+  leak: { name: 'Leak', pts: [[1.5, -1.6], [6, 1.5], [12, 10], [16, 30]], delay: 0.8, depthClass: 'medium' },
   chip_flat: { name: 'Chip Flat', pts: [[1.5, -3], [3, -7], [3.5, -20]], delay: 0.8, depthClass: 'short' },
   block: { name: 'Pass Block', block: true },
   run_block: { name: 'Run Block', runBlock: true },

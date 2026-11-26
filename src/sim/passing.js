@@ -14,37 +14,96 @@ export function throwSpeed(qb, type) {
 export function maxThrow(qb) { return 30 + (qb.r.thp ?? 70) * 0.42; }
 
 // Where will a receiver be after T seconds if he keeps running his route?
-// Distance covered in T seconds accelerating from v0 toward vmax.
-function travel(v0, vmax, a, T) {
-  if (v0 >= vmax) return vmax * T;
-  const tA = (vmax - v0) / a;
-  if (T <= tA) return v0 * T + 0.5 * a * T * T;
-  return v0 * tA + 0.5 * a * tA * tA + vmax * (T - tA);
+// Simulate a receiver running the rest of his route with the same steering and
+// physics as the live simulation (cut deceleration, acceleration, jams, pauses).
+// The trajectory is cached for the current tick: positions every 1/30 s for 4 s.
+const PRED_DT = 1 / 30;
+const PRED_STEPS = 120;
+function routeTrajectory(sim, r) {
+  if (r._trajT === sim.t && r._traj) return r._traj;
+  const route = r.route;
+  const out = r._traj && r._traj.length === (PRED_STEPS + 1) * 2 ? r._traj : new Float32Array((PRED_STEPS + 1) * 2);
+  let x = r.x, y = r.y, vx = r.vx, vy = r.vy;
+  let idx = route ? route.idx : 0;
+  let done = route ? route.done : true;
+  let pauseT = route ? route.pauseT || 0 : 0;
+  let cutBoost = r.cutBoost || 0;
+  let jam = r.jam || 0;
+  let t = sim.t;
+  const top = r.topSpeed;
+  const baseAcc = 5.6 + (r.r.acc ?? 70) * 0.056;
+  const rte = r.r.rte ?? 60;
+  out[0] = x; out[1] = y;
+  for (let k = 1; k <= PRED_STEPS; k++) {
+    t += PRED_DT;
+    let dvx = 0, dvy = 0;
+    const cap = jam > 0 ? 0.35 : 1;
+    if (jam > 0) jam -= PRED_DT;
+    if (!route || (route.delay && t < route.delay)) { /* waiting to release */ }
+    else if (done) {
+      if (!route.sit) {
+        const sp = Math.hypot(vx, vy);
+        if (sp > 0.5) { dvx = vx / sp * top; dvy = vy / sp * top; } else dvx = sim.dir * top;
+        if (y < 2 && dvy < 0) dvy = 0;
+        if (y > FIELD_WIDTH - 2 && dvy > 0) dvy = 0;
+      }
+    } else {
+      const wp = route.pts[idx];
+      const pz = route.pause && route.pause[idx];
+      if (pz && pauseT < pz && dist(x, y, wp.x, wp.y) < 0.7) {
+        pauseT += PRED_DT;
+        if (pauseT >= pz) { idx++; pauseT = 0; if (idx >= route.pts.length) done = true; }
+      } else {
+        const d = dist(x, y, wp.x, wp.y);
+        const next = route.pts[idx + 1];
+        let arrive = 0.1;
+        if (next) {
+          const a1 = Math.atan2(wp.y - y, wp.x - x);
+          const a2 = Math.atan2(next.y - wp.y, next.x - wp.x);
+          let da = Math.abs(a2 - a1); if (da > Math.PI) da = Math.PI * 2 - da;
+          if (da > 0.8) arrive = 1.2 + (da / Math.PI) * 1.6 - rte * 0.012;
+          arrive = Math.max(0.1, arrive);
+        } else if (route.sit) arrive = 1.0;
+        let sp = top;
+        if (d < arrive) sp *= d / arrive;
+        if (d > 1e-4) { dvx = (wp.x - x) / d * sp; dvy = (wp.y - y) / d * sp; }
+        const prev = idx > 0 ? route.pts[idx - 1] : { x: r.startX ?? x, y: r.startY ?? y };
+        const passed = (wp.x - prev.x) * (x - wp.x) + (wp.y - prev.y) * (y - wp.y) > 0 && d < 2.5;
+        if (d < 0.65 || passed) { idx++; if (next) cutBoost = 0.3; if (idx >= route.pts.length) done = true; }
+      }
+    }
+    const maxSp = top * cap;
+    let dsp = Math.hypot(dvx, dvy);
+    if (dsp > maxSp) { dvx *= maxSp / dsp; dvy *= maxSp / dsp; dsp = maxSp; }
+    let acc = cutBoost > 0 ? baseAcc * (1 + rte / 99 * 0.6) : baseAcc;
+    if (cutBoost > 0) cutBoost -= PRED_DT;
+    const spd = Math.hypot(vx, vy);
+    if (spd > 2 && dsp > 0.5) {
+      const dot = (vx * dvx + vy * dvy) / (spd * dsp);
+      if (dot < 0.7) acc *= 0.72 + (r.agility ?? 70) * 0.0032;
+      if (dot < 0) acc *= 1.15;
+    }
+    const ax = dvx - vx, ay = dvy - vy;
+    const a = Math.hypot(ax, ay);
+    const maxDv = acc * PRED_DT;
+    if (a > maxDv) { vx += (ax / a) * maxDv; vy += (ay / a) * maxDv; } else { vx = dvx; vy = dvy; }
+    x += vx * PRED_DT; y += vy * PRED_DT;
+    out[k * 2] = x; out[k * 2 + 1] = y;
+  }
+  r._traj = out;
+  r._trajT = sim.t;
+  return out;
 }
 
+// Where will a receiver be after T seconds if he keeps running his route?
 export function predictPos(sim, r, T) {
-  const route = r.route;
-  const vmax = r.topSpeed * (r.jam > 0 ? 0.5 : 0.97);
-  if (route && !route.done) {
-    const wait = route.delay && sim.t < route.delay ? route.delay - sim.t : 0;
-    let x = r.x, y = r.y;
-    let remain = travel(r.speed, vmax, r.accel * 0.85, Math.max(0, T - wait));
-    for (let i = route.idx; i < route.pts.length; i++) {
-      const p = route.pts[i];
-      const d = dist(x, y, p.x, p.y);
-      if (d >= remain) { x += (p.x - x) / d * remain; y += (p.y - y) / d * remain; remain = 0; break; }
-      remain -= d * 1.08; x = p.x; y = p.y; // breaks cost a little time
-      if (remain <= 0) break;
-    }
-    if (remain > 0 && !route.sit && route.pts.length >= 2) {
-      const a = route.pts[route.pts.length - 2], b = route.pts[route.pts.length - 1];
-      const dd = dist(a.x, a.y, b.x, b.y) || 1;
-      x += (b.x - a.x) / dd * remain; y += (b.y - a.y) / dd * remain;
-    }
-    return { x: clamp(x, 0.5, 119.5), y: clamp(y, 0.4, FIELD_WIDTH - 0.4) };
-  }
-  if (route && route.done && route.sit) return { x: r.x, y: r.y };
-  return { x: clamp(r.x + r.vx * T, 0.5, 119.5), y: clamp(r.y + r.vy * T, 0.4, FIELD_WIDTH - 0.4) };
+  if (!r.route) return { x: clamp(r.x + r.vx * T, 0.5, 119.5), y: clamp(r.y + r.vy * T, 0.4, FIELD_WIDTH - 0.4) };
+  const traj = routeTrajectory(sim, r);
+  const f = Math.max(0, Math.min(PRED_STEPS - 1e-6, T / PRED_DT));
+  const i = Math.floor(f), fr = f - i;
+  const x = traj[i * 2] + (traj[i * 2 + 2] - traj[i * 2]) * fr;
+  const y = traj[i * 2 + 1] + (traj[i * 2 + 3] - traj[i * 2 + 1]) * fr;
+  return { x: clamp(x, 0.5, 119.5), y: clamp(y, 0.4, FIELD_WIDTH - 0.4) };
 }
 
 function solveFlight(sim, qb, r, type) {
@@ -325,6 +384,7 @@ export function resolveCatch(sim, undercutter) {
   const R = 1.5;
   const recIn = r && r.isActive() && dist(r.x, r.y, b.x, b.y) < R && b.z < 3.3 ? r : null;
   const recD = recIn ? dist(recIn.x, recIn.y, b.x, b.y) : 99;
+  sim.catchErr = r ? dist(r.x, r.y, b.x, b.y) : 99;
   const defs = sim.def.filter((d) => d.isActive() && !d.engaged && dist(d.x, d.y, b.x, b.y) < R && b.z < 2.6 + (d.r.jmp ?? 60) * 0.009);
   if (undercutter && !defs.includes(undercutter)) defs.push(undercutter);
   defs.sort((a, c) => dist(a.x, a.y, b.x, b.y) - dist(c.x, c.y, b.x, b.y));
@@ -383,6 +443,7 @@ function completeCatch(sim, r) {
   sim.stats.receiver = r.id;
   sim.catchT = sim.t;
   sim.catchX = r.x;
+  sim.catchSep = Math.min(99, ...sim.def.filter((d) => d.isActive()).map((d) => dist(d.x, d.y, r.x, r.y)));
   r.anim = 'catch';
   // Securing the catch costs speed (less for crossing routes caught in stride).
   const inStride = r.route && !r.route.sit && r.speed > r.topSpeed * 0.7;

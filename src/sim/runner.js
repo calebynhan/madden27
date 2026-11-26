@@ -23,7 +23,7 @@ export function runnerAI(sim, e, dt) {
     e.runHeading = chooseHeading(sim, e, ad, goalX);
   }
   const h = e.runHeading;
-  let sp = e.topSpeed;
+  let sp = e.topSpeed * 0.96; // carrying the ball costs a little top speed
   if (e.protectBall) sp *= 0.95;
   e.setDesired(Math.cos(h) * sp, Math.sin(h) * sp);
   // CPU special moves

@@ -18,7 +18,7 @@ export function updateUser(sim, u, ctl, dt) {
   if (!u.isActive() || u.engaged) return;
   const sprint = ctl.sprint;
   const manual = (scale = 1) => {
-    const sp = u.topSpeed * (sprint ? 1 : 0.8) * scale;
+    const sp = u.topSpeed * (sprint ? 1 : 0.8) * scale * (u.hasBall ? 0.96 : 1);
     u.setDesired(ctl.mx * sp, ctl.my * sp);
   };
   const carrierTeam = sim.carrier ? sim.carrier.team : sim.possession;
