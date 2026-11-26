@@ -131,6 +131,18 @@ node tools/viewer/shoot.cjs assets/player.glb preview.png
 npm run build
 ```
 
+To check the model in the game itself (screenshots go to `test/out/`): `poses.cjs` lines players up in chosen animations (`anim:speed[:L|R]`), and `gfxcheck.cjs` takes day and night close-ups.
+
+```bash
+node tools/viewer/poses.cjs check run:3,run:9,backpedal:2.5,shuffle:2:R
+```
+
+```bash
+node tools/viewer/gfxcheck.cjs check
+```
+
+Setting `HD=1` turns on an unfinished, untested stage in the script: separate gloved fingers, a procedural high-poly sculpt (fabric folds, seams, pad outlines, muscle definition), and Cycles bakes of its normal and ambient-occlusion maps onto a second UV set (`player_normal.png` and `player_ao.png` next to the output). The game doesn't load those maps yet. Without `HD=1` the script builds the model the game ships with.
+
 ### Realism check
 
 `npm test` simulates full CPU-vs-CPU games (15-minute quarters) and compares per-team averages with the 2025 pro season; `node test/realism.mjs` adds play-level checks (run-gain distribution, yards per completion, time to throw, pressure, deep-ball and missed-tackle rates). A typical run:

@@ -10,12 +10,15 @@
 # vertex colors, and the helmet, facemask, stripe and logo patches are added as rigid parts
 # on the head. Units are yards (the game's unit); the model faces +Z in three.js.
 import bpy, bmesh, math, sys, os
-from mathutils import Vector, Matrix
+from mathutils import Vector, Matrix, noise
 from mathutils.bvhtree import BVHTree
 
 ARGS = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
 OUT = ARGS[0] if ARGS else 'player.glb'
 STAGE = int(os.environ.get('STAGE', '99'))
+# HD=1: work in progress (untested) - separate gloved fingers, a procedural high-poly sculpt
+# and Cycles bakes of its normal + AO maps onto a second UV set. Off by default.
+HD = os.environ.get('HD') == '1'
 TARGET_FACES = int(os.environ.get('FACES', '7000'))
 
 
@@ -219,8 +222,11 @@ def build_body():
         parts.append(tube('farm' + side, (ax, 1.33, 0.005), (ax, 1.0, 0.012), lerp_prof([
             (0.0, 0.054, 0.054), (0.25, 0.058, 0.056), (0.75, 0.045, 0.042), (1.0, 0.037, 0.034)]), segs=18, rings=12))
         # Gloved hand: a slightly cupped mitten with a thumb
-        parts.append(superellipsoid('hand' + side, (ax, 0.935, 0.02), (0.034, 0.07, 0.05), n_vert=2.2, n_horiz=2.6, segs=20, rings=12,
-                                    fn=lambda x, y, z: (x, y, z + 0.016 * max(0.0, -y / 0.07) ** 2 + 0.008 * (1 - (y / 0.07) ** 2))))
+        if HD:  # palm only; separate fingers are added later
+            parts.append(superellipsoid('hand' + side, (ax, 0.952, 0.02), (0.032, 0.05, 0.05), n_vert=2.3, n_horiz=2.6, segs=20, rings=12))
+        else:   # gloved mitten
+            parts.append(superellipsoid('hand' + side, (ax, 0.935, 0.02), (0.034, 0.07, 0.05), n_vert=2.2, n_horiz=2.6, segs=20, rings=12,
+                                        fn=lambda x, y, z: (x, y, z + 0.016 * max(0.0, -y / 0.07) ** 2 + 0.008 * (1 - (y / 0.07) ** 2))))
         parts.append(tube('thumb' + side, (ax - 0.014 * s, 0.975, 0.044), (ax - 0.02 * s, 0.925, 0.07), lerp_prof([(0, 0.018, 0.018), (1, 0.013, 0.013)]), segs=12, rings=6))
     return parts
 
@@ -613,8 +619,9 @@ def rigid_head(parts, body):
         p.select_set(True)
     bpy.ops.object.join()
     h = bpy.context.view_layer.objects.active
-    g = h.vertex_groups.new(name='head')
-    g.add([v.index for v in h.data.vertices], 1.0, 'REPLACE')
+    g = h.vertex_groups.get('head') or h.vertex_groups.new(name='head')
+    # everything not already rigged to a hand (the fingers) rides on the head
+    g.add([v.index for v in h.data.vertices if len(v.groups) == 0], 1.0, 'REPLACE')
     activate(h)
     body.select_set(True)
     bpy.context.view_layer.objects.active = body
@@ -687,6 +694,205 @@ def bake_ao(body, samples=48):
         d.color = (a, a, a, 1.0)
     print(f'[ao] min {lo:.2f} max {hi:.2f} mean {tot / max(1, len(data)):.2f}', flush=True)
 
+
+# ---------------------------------------------------------------- sculpted detail (high poly)
+def _gauss(v, w):
+    return math.exp(-(v / w) ** 2)
+
+
+def _angd(a, b):
+    d = (a - b) % (2 * math.pi)
+    return min(d, 2 * math.pi - d)
+
+
+def detail_displace(ob):
+    """A procedural sculpt on the dense fused body: fabric gathering where the jersey tucks in,
+    flank folds, the dip under the pad edge, side/yoke seams, sleeve hems, collar ribbing,
+    folds behind the knees, knee/thigh pad outlines, sock ribbing, glove padding, and muscle
+    definition on the arms and neck. Offsets along the normal, in yards."""
+    me = ob.data
+    disp = []
+    for v in me.vertices:
+        p = T(v.co)
+        x, y, z = p
+        k = nearest_seg(p)
+        zone = zone_of(p)
+        base = k.split('_')[0]
+        d = 0.0
+        nz = noise.noise(Vector((x * 60, y * 60, z * 60)))
+        if zone == 'jersey' and base in ('torso', 'pelvis', 'neck'):
+            ph = math.atan2(x, z)
+            # fabric gathered above the belt: short vertical puckers
+            d += 0.0048 * _gauss(y - (BELT_TOP + 0.035), 0.035) * math.sin(ph * 21 + 2.5 * math.sin(ph * 4) + nz * 1.5)
+            # diagonal folds on the flanks under the arms
+            side = abs(math.sin(ph))
+            if side > 0.55 and 1.2 < y < 1.56:
+                d += 0.0032 * (side - 0.55) / 0.45 * math.sin(y * 52 + z * 28 + nz) * _gauss(y - 1.38, 0.12)
+            # the jersey dips under the front/back plate edge of the pads
+            d -= 0.0026 * _gauss(y - 1.585, 0.012) * (1 - side)
+            # side seams and the shoulder yoke seam
+            if y < 1.56:
+                d += 0.0013 * (_gauss(_angd(ph, math.pi / 2), 0.022) + _gauss(_angd(ph, -math.pi / 2), 0.022))
+            if abs(x) < 0.21:
+                d += 0.0011 * _gauss(y - 1.668, 0.004)
+            # collar ribbing
+            if y > COLLAR_Y - 0.05:
+                d += 0.0007 * math.sin(ph * 72) * _gauss(y - (COLLAR_Y - 0.02), 0.03)
+        elif zone == 'jersey' and base == 'upper':
+            sx = -1 if k.endswith('R') else 1
+            ax = 0.32 * sx
+            pl = math.atan2((x - ax) * sx, z)
+            d += 0.0017 * _gauss(y - (SLEEVE_Y + 0.012), 0.0055)                     # hem
+            d += 0.0022 * _gauss(y - 1.57, 0.035) * math.sin(pl * 3 + y * 40 + nz)    # sleeve folds
+        elif zone == 'pants':
+            if base in ('thigh', 'shin'):
+                sx = -1 if k.endswith('R') else 1
+                lx, lz = x - 0.12 * sx, z
+                pl = math.atan2(lx * sx, lz)
+                back = max(0.0, -math.cos(pl))
+                front = max(0.0, math.cos(pl))
+                # folds behind the knee
+                d += 0.0045 * back * _gauss(y - 0.49, 0.05) * math.sin(y * 115 + pl * 2 + nz)
+                # knee pad and thigh pad outlines (raised borders on the front)
+                for y0, y1, wdt in ((0.41, 0.56, 0.055), (0.62, 0.84, 0.07)):
+                    if front > 0.2:
+                        inside = y0 < y < y1 and abs(lx) < wdt
+                        edge = min(abs(y - y0), abs(y - y1), abs(abs(lx) - wdt)) if inside else min(abs(y - y0) if abs(lx) < wdt else 9, abs(y - y1) if abs(lx) < wdt else 9, abs(abs(lx) - wdt) if y0 < y < y1 else 9)
+                        d += 0.0016 * front * _gauss(edge, 0.004)
+                # outer side seam
+                d += 0.0010 * _gauss(_angd(pl, math.pi / 2), 0.03)
+            else:
+                ph = math.atan2(x, z)
+                # crotch folds and the hip
+                if y < 0.98:
+                    d += 0.0025 * _gauss(y - 0.9, 0.05) * math.sin(ph * 9 + y * 60 + nz)
+        elif zone == 'belt':
+            d += 0.0009 * math.sin((y - BELT_BOT) / (BELT_TOP - BELT_BOT) * math.pi * 3)
+        elif zone == 'socks':
+            sx = -1 if k.endswith('R') else 1
+            pl = math.atan2((x - 0.12 * sx), z)
+            d += 0.0006 * math.sin(pl * 46)
+        elif zone == 'arms' and base in ('upper', 'fore'):
+            sx = -1 if k.endswith('R') else 1
+            ax = 0.32 * sx
+            lx, lz = (x - ax) * sx, z - 0.005
+            pl = math.atan2(lx, lz)
+            front, back = max(0.0, math.cos(pl)), max(0.0, -math.cos(pl))
+            out = max(0.0, math.sin(pl))
+            if base == 'upper':
+                d += 0.0062 * front * _gauss(y - 1.43, 0.045)                                 # biceps
+                d += 0.0050 * back * (_gauss(y - 1.47, 0.04) + 0.6 * _gauss(y - 1.40, 0.03)) # triceps
+            else:
+                d += 0.0045 * front * out * _gauss(y - 1.24, 0.04)                            # forearm
+                d += 0.0030 * back * _gauss(y - 1.31, 0.018)                                  # elbow
+                d -= 0.0018 * _gauss(y - 1.04, 0.025)                                         # wrist
+        elif zone == 'skin' and base in ('neck', 'torso') and z > 0:
+            # neck muscles running from behind the ears down to the collarbone
+            for sg in (-1, 1):
+                t = (y - 1.80) / 0.1
+                cx = sg * (0.045 - 0.03 * t)
+                d += 0.0028 * _gauss(x - cx, 0.012) * _gauss(t - 0.5, 0.6)
+        elif zone == 'gloves':
+            d -= 0.0012 * _gauss(math.sin(y * 260), 0.25)                                    # padding lines
+        elif zone == 'shoes':
+            d += 0.0014 * _gauss(y - 0.018, 0.004)                                           # sole edge
+        disp.append(d)
+    for v, d in zip(me.vertices, disp):
+        v.co += v.normal * d
+    me.update()
+
+
+def build_fingers():
+    """Gloved fingers (separate pieces, rigid on each hand), slightly curled toward the palm."""
+    parts = []
+    for s, side in ((-1, 'R'), (1, 'L')):
+        ax = 0.32 * s
+        for zf, ln in ((0.05, 0.072), (0.024, 0.078), (-0.002, 0.074), (-0.026, 0.06)):
+            pts = []
+            for i in range(7):
+                u = i / 6
+                curl = 0.22 + 0.9 * u
+                px = ax - s * (0.004 + ln * 0.42 * (1 - math.cos(curl)) * u)
+                py = 0.912 - ln * math.sin(min(1.2, 0.3 + curl)) * u * 0.95
+                pts.append((px, py, 0.02 + zf))
+            o = sweep('finger' + side, pts, r=0.0102, segs=8)
+            g = o.vertex_groups.new(name='hand_' + side)
+            g.add([v.index for v in o.data.vertices], 1.0, 'REPLACE')
+            set_mat(o, 'gloves')
+            parts.append(o)
+    return parts
+
+
+def bake_uv(ob):
+    """Second UV layout (non-overlapping) for the baked detail and occlusion maps."""
+    me = ob.data
+    uv = me.uv_layers.new(name='Bake')
+    me.uv_layers.active = uv
+    activate(ob)
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.uv.smart_project(angle_limit=math.radians(62), island_margin=0.004, area_weight=0.0, correct_aspect=True, scale_to_bounds=False)
+    bpy.ops.object.mode_set(mode='OBJECT')
+    # keep a strip at u > 0.98 unbaked (neutral) for parts that don't use the maps
+    for d in uv.data:
+        d.uv = (d.uv[0] * 0.975, d.uv[1])
+
+
+def neutral_bake_uv(ob):
+    me = ob.data
+    if 'UVMap' not in me.uv_layers:
+        me.uv_layers.new(name='UVMap')
+    uv = me.uv_layers.get('Bake') or me.uv_layers.new(name='Bake')
+    for d in uv.data:
+        d.uv = (0.99, 0.5)
+
+
+def bake_maps(low, high, out_dir, size=2048):
+    """Bake the sculpt (tangent-space normals) and its ambient occlusion onto the game mesh."""
+    scn = bpy.context.scene
+    scn.render.engine = 'CYCLES'
+    scn.cycles.device = 'CPU'
+    if scn.world is None:
+        scn.world = bpy.data.worlds.new('world')
+    nimg = bpy.data.images.new('bake_normal', size, size, alpha=False)
+    nimg.generated_color = (0.5, 0.5, 1.0, 1.0)
+    nimg.colorspace_settings.name = 'Non-Color'
+    aimg = bpy.data.images.new('bake_ao', size // 2, size // 2, alpha=False)
+    aimg.generated_color = (1.0, 1.0, 1.0, 1.0)
+    nodes = []
+    for m in low.data.materials:
+        m.use_nodes = True
+        n = m.node_tree.nodes.new('ShaderNodeTexImage')
+        n.image = nimg
+        m.node_tree.nodes.active = n
+        n.select = True
+        nodes.append(n)
+    rb = scn.render.bake
+    rb.use_selected_to_active = True
+    rb.cage_extrusion = 0.012
+    rb.max_ray_distance = 0.05
+    rb.normal_space = 'TANGENT'
+    rb.target = 'IMAGE_TEXTURES'
+    rb.margin = 8
+    activate(high)
+    low.select_set(True)
+    bpy.context.view_layer.objects.active = low
+    scn.cycles.samples = 4
+    print('[bake] normal', bpy.ops.object.bake(type='NORMAL'), flush=True)
+    for n in nodes:
+        n.image = aimg
+    scn.cycles.samples = 48
+    scn.world.light_settings.distance = 0.07
+    print('[bake] ao', bpy.ops.object.bake(type='AO'), flush=True)
+    os.makedirs(out_dir, exist_ok=True)
+    for img, name in ((nimg, 'player_normal.png'), (aimg, 'player_ao.png')):
+        img.filepath_raw = os.path.join(out_dir, name)
+        img.file_format = 'PNG'
+        img.save()
+    for m in low.data.materials:
+        m.use_nodes = False
+    low.data.uv_layers.active = low.data.uv_layers['UVMap']
+
 def fuse(parts, voxel=0.0065):
     activate(parts[0])
     for p in parts:
@@ -728,7 +934,20 @@ def export(path):
 
 def main():
     clear()
-    body = fuse(build_body())
+    parts = build_body()
+    # Dense copy of the volumes for the sculpted detail (baked onto the game mesh)
+    high = None
+    if HD and STAGE >= 5:
+        dup = []
+        for p in parts:
+            c = p.copy(); c.data = p.data.copy(); bpy.context.collection.objects.link(c); dup.append(c)
+        high = fuse(dup, voxel=float(os.environ.get('HIVOXEL', '0.0042')))
+        high.name = 'high'
+        report(high, 'high')
+        detail_displace(high)
+        activate(high)
+        bpy.ops.object.shade_smooth()
+    body = fuse(parts)
     report(body, 'fused')
     body = retopo(body, TARGET_FACES)
     report(body, 'retopo')
@@ -737,13 +956,19 @@ def main():
     activate(body)
     bpy.ops.object.shade_smooth()
     report(body, 'zoned')
+    if high is not None:
+        bake_uv(body)
+        bake_maps(body, high, os.path.dirname(os.path.abspath(OUT)), size=int(os.environ.get('BAKESIZE', '2048')))
+        bpy.data.objects.remove(high, do_unlink=True)
     if STAGE >= 3:
         arm = build_armature()
         skin(body, arm)
-        hparts = build_helmet()
+        hparts = build_helmet() + (build_fingers() if HD else [])
         for o in hparts:
             activate(o)
             bpy.ops.object.shade_smooth()
+            if high is not None or 'Bake' in body.data.uv_layers:
+                neutral_bake_uv(o)
         body = rigid_head(hparts, body)
         report(body, 'joined')
         shape_keys(body)
