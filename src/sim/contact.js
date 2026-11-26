@@ -135,12 +135,15 @@ function updatePair(sim, o, d, dt) {
   if (c && c.team !== d.team && c !== sim.qb) {
     const dc = dist(c.x, c.y, d.x, d.y);
     if (dc < 2.0 && bs < 0.4) pShed += TUNE.nearShed * (1 - bs);
+    // A DB in a receiver's stalk block comes off it to fit the ball carrier heading his way.
+    if (o.task && o.task.kind === 'stalk' && dc < 6) pShed += 1.4 * (1 - dc / 7);
     // Ball has gone past this defender: linemen come off blocks to pursue.
     const past = (c.x - d.x) * sim.attackDir(c.team) > 2.0 || Math.abs(c.y - d.y) > 7;
     if (past && sim.t > 1.2) pShed += TUNE.pastShed;
   }
   if (o.engageT > 3.2) pShed += (o.engageT - 3.2) * 0.2;
   if (sim.kind !== 'scrimmage') pShed += 0.45 + o.engageT * 0.3; // open-field return blocks are brief
+  else if (o.task && o.task.kind === 'stalk') pShed += 0.25 + o.engageT * 0.2; // receivers' stalk blocks on DBs don't last long
   if (sim.rng.chance(pShed * dt)) { shed(sim, o, d, 'shed'); return; }
   // Pancake
   if (bs > 0.92 && ob - db > 12 && sim.rng.chance(0.12 * dt)) {

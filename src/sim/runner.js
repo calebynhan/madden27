@@ -34,7 +34,7 @@ function chooseHeading(sim, e, ad, goalX) {
   const base = ad > 0 ? 0 : Math.PI;
   const v = Math.max(e.speed, e.topSpeed * 0.7);
   const opp = sim.ents.filter((d) => d.team !== e.team && d.state !== 'down' && d.state !== 'falling');
-  const designed = sim.run && e.team === sim.offIdx && sim.kind === 'scrimmage' && sim.frame(e.x, e.y).f < 0.5 && sim.t < (sim.handoffT ?? 0) + 2;
+  const designed = sim.run && !sim.thrown && e.team === sim.offIdx && sim.kind === 'scrimmage' && sim.frame(e.x, e.y).f < 0.5 && sim.t < (sim.handoffT ?? 0) + 2;
   let holeAng = null;
   if (designed && sim.run.aimL !== undefined) {
     const hp = sim.field(1.0, sim.run.aimL);

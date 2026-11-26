@@ -161,7 +161,8 @@ export function evalTarget(sim, qb, r, forceType) {
 // makes the sack, and can knock the ball loose.
 export function startThrow(sim, qb, r, type, place = null) {
   if (!qb.hasBall || sim.thrown || sim.pendingThrow) return false;
-  const rel = qb.user ? 0.17 : clamp(0.3 - ((qb.r.thp ?? 80) - 80) * 0.003, 0.22, 0.36);
+  let rel = qb.user ? 0.17 : clamp(0.3 - ((qb.r.thp ?? 80) - 80) * 0.003, 0.22, 0.36);
+  if (r && r.route && r.route.depthClass === 'screen') rel *= 0.6; // screens are a quick flick
   sim.pendingThrow = { r, type, place, at: sim.t + rel, t0: sim.t };
   qb.windup = rel;
   qb.anim = 'throw'; qb.animT = 0;
@@ -233,6 +234,8 @@ export function throwBall(sim, qb, r, type, place) {
   sim.throwFromBox = Math.abs(sim.frame(qb.x, qb.y).l) < 3.6;
   qb.anim = 'throw'; qb.animT = 0;
   sim.events.push({ t: sim.t, type: 'pass', from: qb.id, to: r ? r.id : null, ptype: type, air: sim.stats.airYards });
+  // RPO pulled late: a lineman more than a yard downfield on a pass past the line is illegal.
+  if (sim.rpoThrown && sim.stats.airYards > 0 && sim.off.some((o) => o.pos === 'OL' && sim.frame(o.x, o.y).f > 1.0)) sim.flags.push({ type: 'ineligible', team: qb.team });
   for (const dd of sim.def) dd.ballReactT = 0;
   // Human offense: take control of the intended receiver.
   if (r && sim.ctl(qb.team)) sim.setUser(qb.team, r);
@@ -387,16 +390,34 @@ export function updateBall(sim, dt) {
   }
 }
 
+// Catch type: aggressive (high-point it in traffic), possession (secure it, feet down)
+// or run-after-catch (in stride). Humans hold a button while the ball is in the air;
+// CPU receivers pick what the throw calls for.
+function catchMode(sim, r, contest) {
+  const uc = r.user ? sim.ctl(r.team) : null;
+  if (uc) {
+    if (uc.held.has('catch_aggr') || uc.pressed.has('catch_aggr')) return 'aggr';
+    if (uc.held.has('catch_poss') || uc.pressed.has('catch_poss')) return 'poss';
+    if (uc.held.has('catch_rac') || uc.pressed.has('catch_rac')) return 'rac';
+    return 'auto';
+  }
+  if (contest > 0.32) return 'aggr';
+  if (contest < 0.12 && r.route && !r.route.sit && r.speed > r.topSpeed * 0.6) return 'rac';
+  if (r.y < 2 || r.y > FIELD_WIDTH - 2) return 'poss';
+  return 'auto';
+}
+
 function catchProb(sim, r, err, contest) {
   const rr = r.r;
-  let p = 0.635 + (rr.cth ?? 60) * 0.0042;
+  let p = TUNE.catchBase + (rr.cth ?? 60) * 0.0042;
   if (err > 0.6) p *= Math.max(0.1, 1 - (err - 0.6) * 0.45 * (1.15 - (rr.spc ?? 50) / 200));
   // Contest from nearby defenders (catch in traffic mitigates)
   const cit = (rr.cit ?? 55) / 100;
   p *= 1 - contest * (1 - cit * 0.5);
-  const uc = r.user ? sim.ctl(r.team) : null;
-  if (uc && uc.held.has('catch_aggr')) p += contest > 0.15 ? 0.07 : -0.02;
-  if (uc && uc.held.has('catch_poss')) p += 0.03;
+  const mode = catchMode(sim, r, contest);
+  if (mode === 'aggr') p += contest > 0.15 ? 0.08 : -0.02;
+  else if (mode === 'poss') p += 0.03;
+  else if (mode === 'rac') p -= contest > 0.15 ? 0.09 : 0.01;
   if (sim.weather.kind === 'rain') p -= 0.03;
   if (sim.weather.kind === 'snow') p -= 0.02;
   p += sim.ctl(r.team) ? DIFF_USER_CATCH[sim.difficulty] : (sim.isUser(1 - r.team) ? DIFF_CPU_CATCH[sim.difficulty] : 0);
@@ -444,6 +465,7 @@ export function resolveCatch(sim, undercutter) {
   }
   if (!recIn) return incompletion(sim, 'overthrown', null);
   const p = catchProb(sim, recIn, recD, contest);
+  sim.catchMode = catchMode(sim, recIn, contest);
   // DPI: early contact from a trailing defender who didn't play the ball
   for (const d of defs) {
     const dd = dist(d.x, d.y, recIn.x, recIn.y);
@@ -461,7 +483,7 @@ export function resolveCatch(sim, undercutter) {
 function completeCatch(sim, r) {
   // Sideline: need feet in bounds
   if (r.y < 0.15 || r.y > FIELD_WIDTH - 0.15) {
-    const toe = r.y > -0.5 && r.y < FIELD_WIDTH + 0.5 && sim.rng.chance(0.25 + (r.r.awr ?? 60) * 0.004);
+    const toe = r.y > -0.5 && r.y < FIELD_WIDTH + 0.5 && sim.rng.chance(0.25 + (r.r.awr ?? 60) * 0.004 + (sim.catchMode === 'poss' ? 0.2 : 0));
     if (!toe) return incompletion(sim, 'oob', null);
     r.y = clamp(r.y, 0.2, FIELD_WIDTH - 0.2);
   }
@@ -472,10 +494,13 @@ function completeCatch(sim, r) {
   sim.catchX = r.x;
   sim.catchSep = Math.min(99, ...sim.def.filter((d) => d.isActive()).map((d) => dist(d.x, d.y, r.x, r.y)));
   r.anim = 'catch';
-  // Securing the catch costs speed (less for crossing routes caught in stride).
+  // Securing the catch costs speed: least for a run-after-catch grab in stride, most
+  // for a high-pointed aggressive catch.
   const inStride = r.route && !r.route.sit && r.speed > r.topSpeed * 0.7;
-  const k = inStride ? 0.8 : 0.6;
+  const mode = sim.catchMode || 'auto';
+  const k = mode === 'rac' ? (inStride ? 0.95 : 0.8) : mode === 'aggr' ? 0.45 : mode === 'poss' ? 0.62 : (inStride ? 0.86 : 0.68);
   r.vx *= k; r.vy *= k;
+  if (r.user && mode !== 'auto') sim.events.push({ t: sim.t, type: 'catchtype', mode, by: r.id });
   sim.events.push({ t: sim.t, type: 'catch', by: r.id, x: r.x });
   // Big hit at the catch point can jar it loose — handled as a normal tackle/fumble.
 }

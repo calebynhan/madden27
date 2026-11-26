@@ -6,7 +6,7 @@
 // side for runs/boots: +1 = right, -1 = left (mirrored when a play is flipped)
 
 const P = (form, name, routes, opts = {}) => ({ form, name, type: opts.type || 'pass', drop: opts.drop || 'm', routes, reads: opts.reads, tags: opts.tags || [], side: opts.side || 1, screen: opts.screen, rbFake: opts.rbFake });
-const R = (form, name, scheme, side, opts = {}) => ({ form, name, type: 'run', run: { scheme, ball: opts.ball || 'RB', side, lead: opts.lead }, routes: opts.routes || {}, tags: opts.tags || [], side });
+const R = (form, name, scheme, side, opts = {}) => ({ form, name, type: 'run', run: { scheme, ball: opts.ball || 'RB', side, lead: opts.lead }, routes: opts.routes || {}, tags: opts.tags || [], side, rpo: opts.rpo || null });
 
 const B = 'block';
 
@@ -75,12 +75,16 @@ export const OFF_PLAYS = [
   R('pistol_ace', 'Outside Zone', 'oz', -1, { tags: ['outside'] }),
   R('pistol_ace', 'Power', 'power', 1, { tags: ['inside', 'short'] }),
   R('pistol_ace', 'Zone Read', 'read', 1, { tags: ['inside', 'option'] }),
+  R('pistol_ace', 'Speed Option', 'option', -1, { ball: 'QB', tags: ['outside', 'option'] }),
   P('pistol_ace', 'PA Boot', { X: 'over', Z: 'go', Y: 'flat', H: 'drag', RB: B }, { type: 'pa', drop: 'boot', side: -1, reads: ['X', 'H', 'Y', 'Z'], tags: ['pa', 'medium'] }),
   P('pistol_ace', 'Y-Cross', { X: 'go', Z: 'curl', Y: 'cross', H: 'flat', RB: B }, { drop: 'd', reads: ['Y', 'Z', 'H', 'X'], tags: ['medium', 'zone'] }),
   // ----------------------------- GUN DOUBLES -----------------------------
   R('gun_doubles', 'Inside Zone', 'iz', 1, { tags: ['inside'] }),
   R('gun_doubles', 'HB Draw', 'draw', -1, { tags: ['inside', 'draw'] }),
   R('gun_doubles', 'Zone Read', 'read', 1, { tags: ['inside', 'option'] }),
+  // RPOs: the QB reads the overhang defender — hand off, or pull it and throw.
+  R('gun_doubles', 'RPO Bubble', 'iz', 1, { rpo: { tag: 'SL', route: 'bubble' }, tags: ['inside', 'rpo'] }),
+  R('gun_doubles', 'RPO Slant', 'iz', 1, { rpo: { tag: 'X', route: 'slant' }, tags: ['inside', 'rpo'] }),
   P('gun_doubles', 'Mesh Spot', { X: 'go', SL: 'drag', Z: 'snag', Y: 'drag', RB: 'flat' }, { drop: 'q', reads: ['SL', 'Y', 'Z', 'RB', 'X'], tags: ['short', 'man'] }),
   P('gun_doubles', 'Stick', { X: 'fade', SL: 'stick', Z: 'go', Y: 'stick', RB: 'flat' }, { drop: 'q', reads: ['Y', 'SL', 'RB', 'Z', 'X'], tags: ['short', 'quick', 'zone'] }),
   P('gun_doubles', 'Four Verticals', { X: 'go', SL: 'seam', Z: 'go', Y: 'seam', RB: 'swing' }, { drop: 'm', reads: ['SL', 'Y', 'X', 'Z', 'RB'], tags: ['deep', 'zone'] }),
@@ -91,6 +95,8 @@ export const OFF_PLAYS = [
   P('gun_doubles', 'Bubble Screen', { X: 'run_block', SL: 'bubble', Z: 'go', Y: 'drag', RB: B }, { drop: 'q', screen: 'SL', reads: ['SL'], tags: ['screen', 'quick'] }),
   // ----------------------------- GUN TRIPS TE -----------------------------
   R('gun_trips', 'Inside Zone', 'iz', -1, { tags: ['inside'] }),
+  R('gun_trips', 'RPO Glance', 'iz', -1, { rpo: { tag: 'Z', route: 'glance' }, tags: ['inside', 'rpo'] }),
+  R('gun_trips', 'Zone Read', 'read', 1, { tags: ['inside', 'option'] }),
   R('gun_trips', 'Counter', 'counter', 1, { tags: ['inside'] }),
   R('gun_trips', 'HB Draw', 'draw', 1, { tags: ['inside', 'draw'] }),
   P('gun_trips', 'Y-Cross', { X: 'post', Z: 'go', SL: 'curl', Y: 'cross', RB: 'flat' }, { drop: 'd', reads: ['Y', 'SL', 'RB', 'X'], tags: ['medium', 'zone'] }),

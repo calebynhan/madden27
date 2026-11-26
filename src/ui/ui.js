@@ -68,6 +68,7 @@ export class UI {
     L.playcall = h('div'); L.playcall.id = 'playcall';
     L.kick = h('div', 'panel'); L.kick.id = 'kickmeter';
     L.toast = h('div', 'toast panel');
+    L.drive = h('div', 'drive-card');
     L.replay = h('div', 'replay-badge', 'INSTANT REPLAY');
     for (const k in L) { L[k].classList.add('hidden'); this.root.appendChild(L[k]); }
   }
@@ -84,6 +85,16 @@ export class UI {
     this.screenEl = el;
     this.screenNav = nav || null;
     this.root.appendChild(el);
+  }
+
+  // Broadcast-style drive summary card.
+  showDrive(g, d) {
+    const t = g.teams[d.team].def;
+    const m = Math.floor(d.time / 60), sec = Math.round(d.time % 60);
+    const good = d.result === 'Touchdown' || d.result === 'Field goal';
+    this.layer.drive.innerHTML = `<div class="dv-head" style="background:${t.primary};color:${t.secondary || '#fff'}">${t.abbr} DRIVE SUMMARY</div><div class="dv-body"><b class="${good ? 'good' : ''}">${d.result}</b><span>${d.plays} play${d.plays === 1 ? '' : 's'} · ${d.yards} yds · ${m}:${String(sec).padStart(2, '0')}</span></div>`;
+    this.layer.drive.classList.remove('hidden');
+    this.driveT = 4.5;
   }
 
   toast(text, sec = 2) {
@@ -142,8 +153,9 @@ export class UI {
     const sec = (title, rows) => `<div><h3>${title}</h3>${rows.map(([a, k]) => `<div class="c"><span>${a}</span><span>${k}</span></div>`).join('')}</div>`;
     c.innerHTML =
       sec('Pre-snap (offense)', [['Snap ball', 'Space · A'], ['Hot route', 'H · Y'], ['Motion', 'M · LB'], ['Audible / flip', 'B · X'], ['Hard count', 'K'], ['Pass protection slide', 'L'], ['Show / hide play art', 'I · LT'], ['Timeout', 'T · Back'], ['Pause', 'Esc · Start']]) +
-      sec('Passing', [['Throw to receiver', '1–5 · A B X Y RB'], ['Lob / touch / bullet', 'tap / medium / hold'], ['Lead the pass', 'hold a direction while releasing'], ['Throw it away', 'X'], ['Scramble', 'move with WASD / stick'], ['Aggressive catch', 'R · Y (hold)'], ['Possession catch', 'C · A (hold)']]) +
+      sec('Passing', [['Throw to receiver', '1–5 · A B X Y RB'], ['Lob / touch / bullet', 'tap / medium / hold'], ['Lead the pass', 'hold a direction while releasing'], ['Throw it away', 'X'], ['Scramble', 'move with WASD / stick'], ['Aggressive catch (traffic)', 'R · Y (hold)'], ['Possession catch (sideline)', 'C · A (hold)'], ['Run-after-catch (in stride)', 'E · X (hold)']]) +
       sec('Ball carrier', [['Move', 'WASD / Arrows · Left stick'], ['Sprint', 'Shift · RT'], ['Juke left / right', 'Q / E · Right stick ←/→'], ['Spin', 'R · B'], ['Stiff arm', 'F · A'], ['Truck', 'C · Right stick ↑'], ['Hurdle', 'V · Y'], ['Stutter step', 'X · Right stick ↓'], ['Dive / QB slide', 'Z · X'], ['Protect ball (hold)', 'G · RB']]) +
+      sec('Option &amp; RPO', [['Zone read: keep it', 'move the stick at the mesh'], ['Speed option: pitch', 'X · LB'], ['RPO: pull and throw', 'read receiver\'s button before the handoff']]) +
       sec('Defense', [['Switch player', 'Tab · B'], ['Dive tackle', 'Space · X'], ['Hit stick', 'F · Right stick ↑'], ['Strip ball', 'Q · RB'], ['Swat ball', 'E · X (ball in air)'], ['Play the ball (INT)', 'R · Y'], ['DL swim / bull rush', 'E / R · A / X'], ['Audible coverage', 'B · X (pre-snap)'], ['Assign defender (blitz, spy, zone, man)', 'H · Y (pre-snap)'], ['Coverage adjustments (shade, press, show blitz)', 'N · RB (pre-snap)'], ['Shift D-line', 'J · LB (pre-snap)']]) +
       sec('Special teams', [['Aim kick', '← → / Left stick'], ['Start / set power / accuracy', 'Space · A (3 presses)'], ['Fair catch (returner)', 'F'], ['Kneel in end zone', 'Z']]) +
       sec('Other', [['Instant replay (after play)', 'Y'], ['Skip post-play', 'Space · A'], ['Camera', 'Settings → Camera'], ['Replay: scrub / rotate', '← → / Q E'], ['Replay: play / pause', 'Space']]);
@@ -787,6 +799,7 @@ export class UI {
     const app = this.app;
     const g = app.game;
     if (this.toastT > 0) { this.toastT -= dt; if (this.toastT <= 0) this.layer.toast.classList.add('hidden'); }
+    if (this.driveT > 0) { this.driveT -= dt; if (this.driveT <= 0) this.layer.drive.classList.add('hidden'); }
     if (this.bannerT > 0) { this.bannerT -= dt; if (this.bannerT <= 0) this.layer.banner.classList.add('hidden'); }
     if (!g || app.paused || app.intro || app.halftime) return;
     if (g.phase !== this.lastPhase) this.onPhaseChange(this.lastPhase, g.phase);
@@ -877,8 +890,12 @@ export class UI {
       else html = `<div>${k('Tab', 'B')} Switch ${k('B', 'X')} Audible ${k('H', 'Y')} Assign player</div><div>${k('N', 'RB')} Coverage ${k('J', 'LB')} D-line shift ${k('I', 'LT')} Art</div>`;
     } else if (g.phase === 'live' && sim && userTeam !== undefined) {
       const u = sim.userEnt[userTeam];
-      if (u && u.hasBall && u === sim.qb && !sim.thrown && sim.playType !== 'run' && !u.qbRunner) html = `<div>${k('1-5', 'A B X Y RB')} Throw (tap=lob · hold=bullet)</div><div>${k('X', 'LB')} Throw away · move to scramble</div>`;
+      if (u && u === sim.qb && sim.run && sim.run.optionLive && u.hasBall) html = `<div>${k('X', 'LB')} Pitch to the back · steer to keep it</div>`;
+      else if (u && u === sim.qb && sim.rpo && sim.run && !sim.run.handoffDone && !sim.thrown && !sim.pendingThrow) html = `<div>RPO: ${k(String((sim.icons || []).findIndex((e) => e.tag === sim.rpo.tag) + 1), 'A')} Pull and throw · otherwise it's a handoff</div>`;
+      else if (u && u === sim.qb && sim.run && sim.run.scheme === 'read' && !sim.run.handoffDone && !u.qbRunner) html = `<div>Zone read: move the stick at the mesh to keep it</div>`;
+      else if (u && u.hasBall && u === sim.qb && !sim.thrown && sim.playType !== 'run' && !u.qbRunner) html = `<div>${k('1-5', 'A B X Y RB')} Throw (tap=lob · hold=bullet)</div><div>${k('X', 'LB')} Throw away · move to scramble</div>`;
       else if (u && u.hasBall) html = `<div>${k('Q/E', 'RS ←→')} Juke ${k('R', 'B')} Spin ${k('F', 'A')} Stiff arm</div><div>${k('C', 'RS ↑')} Truck ${k('V', 'Y')} Hurdle ${k('Z', 'X')} Dive ${k('Shift', 'RT')} Sprint</div>`;
+      else if (u && u.team === sim.offIdx && sim.thrown && sim.ball.state === 'air' && sim.target === u) html = `<div>Hold to catch: ${k('R', 'Y')} Aggressive ${k('C', 'A')} Possession ${k('E', 'X')} Run after catch</div>`;
       else if (u && u.team !== sim.possession) html = `<div>${k('Tab', 'B')} Switch ${k('Space', 'X')} Dive tackle ${k('F', 'RS ↑')} Hit stick</div><div>${k('Q', 'RB')} Strip ${k('E', 'X')} Swat ${k('R', 'Y')} Play ball</div>`;
     } else if (g.phase === 'post') html = `<div>${k('Y', 'Y')} Instant replay · ${k('Space', 'A')} Continue</div>`;
     if (html !== this.hintKey) { this.hintKey = html; L.hints.innerHTML = html; }
@@ -901,10 +918,12 @@ export class UI {
     if (sim && inPlay && sim.kind === 'scrimmage' && (g.phase === 'presnap' || g.phase === 'live')) {
       const offUser = g.isUser(sim.offIdx) && !g.isCoach(sim.offIdx);
       const qbHas = sim.qb && (sim.qb.hasBall || sim.phase === 'presnap' || sim.ball.state === 'snap') && !sim.thrown && !sim.qb.qbRunner;
-      if (offUser && qbHas && sim.playType !== 'run' && sim.icons) {
+      const rpoLive = !!(sim.rpo && sim.run && !sim.run.handoffDone);
+      if (offUser && qbHas && (sim.playType !== 'run' || rpoLive) && sim.icons) {
         const src = this.app.humans[sim.offIdx];
         const pad = src && src.kind === 'gamepad';
         sim.icons.forEach((e, i) => {
+          if (sim.playType === 'run' && e.tag !== sim.rpo.tag) return; // RPO: only the read receiver
           const p = r.project(e.x, e.y, 2.7);
           if (!p.visible) return;
           const lbl = pad ? PAD_GLYPH['pass' + (i + 1)] : String(i + 1);
@@ -967,6 +986,8 @@ export class UI {
       return out.join('<br>') || '—';
     };
     const top = (t) => formatClock(ts(t).top);
+    const potg = g.over ? box.playerOfGame(g.score) : null;
+    const potgHTML = potg ? `<div class="potg"><small>PLAYER OF THE GAME</small><b>#${potg.num} ${potg.name}</b> <span>${potg.pos} · ${g.teams[potg.team].def.abbr}</span><div>${potg.line}</div></div>` : '';
     p.innerHTML = `<h1>${opts.title || (g.over ? 'Final' : 'Box Score')}</h1>
       <div class="scoreline">${badgeHTML(A)}<div class="big">${g.score[1]}</div><div style="color:var(--dim)">—</div><div class="big">${g.score[0]}</div>${badgeHTML(H)}</div>
       <table><tr><th>Team</th>${qh}<th>T</th></tr><tr><td>${A.city} ${A.name}</td>${qrow(1)}<td><b>${g.score[1]}</b></td></tr><tr><td>${H.city} ${H.name}</td>${qrow(0)}<td><b>${g.score[0]}</b></td></tr></table>
@@ -974,7 +995,7 @@ export class UI {
       ${statRow('Total yards', (t) => ts(t).yards)}${statRow('Passing', (t) => `${ts(t).passCmp}/${ts(t).passAtt}, ${ts(t).passYds}`)}${statRow('Rushing', (t) => `${ts(t).rushAtt}-${ts(t).rushYds}`)}
       ${statRow('First downs', (t) => ts(t).firstDowns)}${statRow('3rd down', (t) => `${ts(t).thirdConv}/${ts(t).third}`)}${statRow('Turnovers', (t) => ts(t).turnovers)}
       ${statRow('Sacks allowed', (t) => ts(t).sacks)}${statRow('Penalties', (t) => `${ts(t).penalties}-${ts(t).penYds}`)}${statRow('Field goals', (t) => `${ts(t).fgm}/${ts(t).fga}`)}${statRow('Time of possession', top)}</table>
-      <div class="row" style="align-items:flex-start;gap:20px;font-size:13px"><div style="flex:1"><b>${A.name}</b><br>${leaders(1)}</div><div style="flex:1"><b>${H.name}</b><br>${leaders(0)}</div></div>
+      ${potgHTML}<div class="row" style="align-items:flex-start;gap:20px;font-size:13px"><div style="flex:1"><b>${A.name}</b><br>${leaders(1)}</div><div style="flex:1"><b>${H.name}</b><br>${leaders(0)}</div></div>
       <h3 style="font-size:12px;letter-spacing:.2em;color:var(--dim);margin:14px 0 6px">PLAY-BY-PLAY</h3><div class="log">${g.log.slice(-60).reverse().map((l) => `<div>${l}</div>`).join('')}</div>`;
     const btns = h('div', 'row');
     btns.style.marginTop = '14px';

@@ -15,16 +15,17 @@ const path = require('path');
   await page.click('text=Kick Off');
   await page.waitForTimeout(600);
   await page.keyboard.press('Enter'); // skip the intro
-  const results = { timeoutFromPlaycall: null, defAssign: null, coverageShade: null, throwWindupMs: null, coachAutoSnaps: 0, coachUserEnt: null };
+  const results = { timeoutFromPlaycall: null, defAssign: null, coverageShade: null, throwWindupMs: null, coachAutoSnaps: 0, coachUserEnt: null, driveCard: false };
   const st = () => page.evaluate(() => {
     const a = window.__app, g = a.game; if (!g) return null; const s = g.sim; const user = a.humans.findIndex(Boolean);
     const u = s && s.userEnt ? s.userEnt[user] : null;
     return { phase: g.phase, poss: g.possession, user, kind: s && s.kind, simPhase: s && s.phase, qbBall: s && s.qb && s.qb.hasBall, thrown: s && s.thrown, pending: !!(s && s.pendingThrow), to: g.timeouts[user], km: !!a.ui.km, popup: a.ui.popup ? a.ui.popup.el.querySelector('h2').textContent : null, pc: !!(a.ui.pcState[user] && !a.ui.pcState[user].done), assign: u && u.assign ? u.assign.t : null, shade: s && s.covAdj ? s.covAdj.shade : null, over: g.over };
   });
   let plays = 0;
-  for (let i = 0; i < 700 && (plays < 14 || results.throwWindupMs === null) && plays < 40; i++) {
+  for (let i = 0; i < 900 && (plays < 14 || results.throwWindupMs === null || !results.driveCard) && plays < 45; i++) {
     const s = await st();
     if (!s || s.over) break;
+    if (!results.driveCard) results.driveCard = await page.evaluate(() => { const e = document.querySelector('.drive-card'); return !!(e && !e.classList.contains('hidden') && e.textContent.includes('DRIVE SUMMARY')); });
     if (s.popup && !/Assign|Coverage/.test(s.popup)) { await page.keyboard.press('Enter'); }
     else if (s.phase === 'playcall' && s.pc) {
       if (results.timeoutFromPlaycall === null && s.to > 0) {
@@ -83,7 +84,7 @@ const path = require('path');
     await page.waitForTimeout(200);
   }
   console.log(JSON.stringify(results));
-  const ok = results.timeoutFromPlaycall === true && results.defAssign === 'blitz' && results.coverageShade === 'inside' && results.throwWindupMs && results.throwWindupMs.ms < 900 && results.coachAutoSnaps >= 2 && results.coachUserEnt === false;
+  const ok = results.timeoutFromPlaycall === true && results.defAssign === 'blitz' && results.coverageShade === 'inside' && results.throwWindupMs && results.throwWindupMs.ms < 900 && results.coachAutoSnaps >= 2 && results.coachUserEnt === false && results.driveCard;
   console.log(ok ? 'FEATURES OK' : 'FEATURES CHECK FAILED');
   console.log('ERRORS', errors.length); for (const e of errors.slice(0, 20)) console.log(e);
   await browser.close();

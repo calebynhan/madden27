@@ -208,6 +208,20 @@ export function alignDefense(defEnts, offEnts, ballX, ballY, dir, press) {
       f = 1.1;
     } else if (s.lb) {
       l = s.lb.l * st; f = s.lb.f;
+      // Overhang: a linebacker with an outside zone (curl/flat) walks out to an apex between
+      // the box and the slot receiver on his side; one in man on a slot or tight end
+      // aligns on him. Backs are covered from the box.
+      if (a.t === 'zone') {
+        const zs = zoneSpec(a.zone, st);
+        if ((zs.base === 'flat' || zs.base === 'curl') && zs.side) {
+          const recs = zs.side === st ? nums.S : nums.W;
+          const r2 = recs && recs.length >= 2 ? recs[1] : null;
+          if (r2 && Math.abs(r2._l) > 5) { l = (r2._l + Math.sign(r2._l) * 4) / 2; f = 4.6; }
+        }
+      } else if (a.t === 'man' && d.manTarget && !nums.backs.includes(d.manTarget)) {
+        const r = d.manTarget;
+        l = r._l - Math.sign(r._l || 1) * 0.9; f = Math.abs(r._l) > 5 ? 4.2 : 3.6;
+      }
     } else {
       // DBs: derive from the assignment.
       const isCB = s.db === 'cb', isNB = s.db === 'nb';

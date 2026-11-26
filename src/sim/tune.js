@@ -19,4 +19,5 @@ export const TUNE = {
   setHitch: 0.15,        // plant-and-reset time at the top of the drop before the first read
   quickRead: 0.6,        // earliest first read on quick-game (1-step / catch-and-throw) drops
   deepSigma: 0.07,      // extra pass scatter per yard beyond 20 yards
+  catchBase: 0.62,       // base catch probability before hands rating, contest and placement
 };

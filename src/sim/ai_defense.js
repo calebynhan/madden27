@@ -80,11 +80,14 @@ export function updateDefense(sim, d, dt) {
   // offensive line's first steps (play-action fools them for a moment).
   if (!sim.thrown && (d.pos === 'LB' || (d.pos === 'S' && !(t.kind === 'zone' && t.zs.deep))) && t.kind !== 'blitz' && t.kind !== 'rush' && !(c && c !== sim.qb && sim.phase === 'run' && sim.t > (d.readT || 0) + 0.6)) {
     if (d.readT === undefined) d.readT = (0.2 + (99 - (d.r.prc ?? 60)) * 0.008) * (d.react || 1);
-    const designedRun = !!sim.run && sim.run.scheme !== 'draw' && sim.run.scheme !== 'qb_draw';
+    // Once the QB pulls the ball on an RPO, they see it and get back into coverage.
+    const designedRun = !!sim.run && sim.run.scheme !== 'draw' && sim.run.scheme !== 'qb_draw' && !sim.rpoThrown;
     const pa = sim.playAction;
     const biteT = d.readT + 0.35 + (99 - (d.r.prc ?? 60)) * 0.014;
     const manOnWR = t.kind === 'man' && t.target && t.target.pos !== 'RB' && t.target.pos !== 'FB' && t.target.task?.kind === 'route';
     if (sim.t < d.readT) { d.stop(); d.anim = 'shuffle'; return; }
+    // RPO: a defender responsible for the read receiver stays honest until the handoff.
+    if (rpoHonest(sim, t)) return execTask(sim, d, dt);
     if (!manOnWR && (designedRun || (pa && sim.t < biteT))) {
       const df = sim.frame(d.x, d.y);
       // Key the back: flow with his track (with a read error that shrinks with
@@ -106,7 +109,8 @@ export function updateDefense(sim, d, dt) {
   // read. Play-action pulls them up for a moment before they recover.
   if (!sim.thrown && d.pos === 'S' && t.kind === 'zone' && t.zs.deep) {
     if (d.readT === undefined) d.readT = (0.22 + (99 - (d.r.prc ?? 60)) * 0.008) * (d.react || 1);
-    const designedRun = !!sim.run && sim.run.scheme !== 'draw' && sim.run.scheme !== 'qb_draw';
+    // On an RPO the safeties keep their eyes on the QB until the ball is handed off.
+    const designedRun = !!sim.run && sim.run.scheme !== 'draw' && sim.run.scheme !== 'qb_draw' && (!sim.rpo || sim.run.handoffDone);
     const pa = sim.playAction;
     const biteT = d.readT + 0.2 + (99 - (d.r.prc ?? 60)) * 0.012;
     const df = sim.frame(d.x, d.y);
@@ -141,11 +145,28 @@ export function updateDefense(sim, d, dt) {
       // Still executing assignment (play-action fooled, coverage carrying receivers)
       return execTask(sim, d, dt);
     }
+    // Option responsibility: play-side DBs take the pitch man while the QB still has the ball.
+    if (sim.run && sim.run.optionLive && c === sim.qb && (d.pos === 'CB' || d.pos === 'S')) {
+      const rb = sim.off.find((o) => o.tag === 'RB' && o.isActive());
+      if (rb && (sim.frame(d.x, d.y).l - sim.frame(c.x, c.y).l) * sim.run.side > -3) return pursue(sim, d, rb, dt);
+    }
     // Deep defenders hold until the runner crosses the line.
     if (!afterCatch && t.kind === 'zone' && t.zs.deep && d.pos !== 'CB' && sim.frame(c.x, c.y).f < 1.0 && since < react + TUNE.deepRunHold) return execTask(sim, d, dt);
     return pursue(sim, d, c, dt);
   }
   return execTask(sim, d, dt);
+}
+
+function rpoHonest(sim, t) {
+  if (!sim.rpo || !sim.run || sim.run.handoffDone) return false;
+  const rec = sim.off.find((o) => o.tag === sim.rpo.tag);
+  if (!rec) return false;
+  if (t.kind === 'man') return t.target === rec;
+  if (t.kind === 'zone' && !t.zs.deep && t.lm) {
+    const lf = sim.frame(t.lm.x, t.lm.y), rf = sim.frame(rec.x, rec.y);
+    return Math.sign(lf.l) === Math.sign(rf.l) && Math.abs(lf.l) > 2.5;
+  }
+  return false;
 }
 
 function execTask(sim, d, dt) {
@@ -314,7 +335,17 @@ function zoneCover(sim, d, dt) {
 function playBallInAir(sim, d, dt) {
   const fl = sim.ball.flight;
   if (!fl) return execTask(sim, d, dt);
-  if (!d.ballReactT) d.ballReactT = sim.t + (0.08 + (99 - (d.r.awr ?? 60)) * 0.0035 + (d.task.kind === 'man' ? 0.08 : 0)) * (d.react || 1);
+  // Screens and bubbles develop right in front of the second level: nearby defenders see
+  // them immediately and attack the spot where the receiver will turn upfield.
+  const screenThrow = !!(fl.target && fl.target.route && fl.target.route.depthClass === 'screen');
+  const nearScreen = screenThrow && dist(d.x, d.y, fl.tx, fl.ty) < 15;
+  if (!d.ballReactT) d.ballReactT = sim.t + (nearScreen ? 0.03 + (99 - (d.r.prc ?? 60)) * 0.0015 : 0.08 + (99 - (d.r.awr ?? 60)) * 0.0035 + (d.task.kind === 'man' ? 0.08 : 0)) * (d.react || 1);
+  if (nearScreen && sim.t >= d.ballReactT && d.task.kind !== 'rush') {
+    const ad = sim.attackDir(sim.offIdx);
+    d.seek(fl.tx + ad * 1.6, fl.ty, 1, 0.3);
+    d.anim = 'run';
+    return;
+  }
   if (sim.t < d.ballReactT || d.task.kind === 'rush' || d.task.kind === 'blitz') {
     if (d.task.kind === 'rush' || d.task.kind === 'blitz') { // rushers peel back toward the catch
       if (sim.t > d.ballReactT + 0.3) return d.seek(fl.tx, fl.ty, 0.9, 1);

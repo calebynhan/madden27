@@ -3,7 +3,7 @@ import { clamp, dist } from '../core/util.js';
 import { FIELD_WIDTH } from '../core/constants.js';
 import { startMove, runnerAI } from './runner.js';
 import { startThrow, throwAway } from './passing.js';
-import { updateOffense } from './ai_offense.js';
+import { updateOffense, optionPitch, rpoPullAndThrow } from './ai_offense.js';
 import { updateDefense } from './ai_defense.js';
 import { fumble } from './contact.js';
 
@@ -46,12 +46,37 @@ export function updateUser(sim, u, ctl, dt) {
         return;
       }
     }
+    // RPO: pull it and throw to the read receiver before the handoff happens.
+    if (sim.rpo && sim.run && !sim.run.handoffDone && !sim.thrown) {
+      for (let i = 1; i <= 5; i++) {
+        const hold = ctl.released.get('pass' + i);
+        if (hold === undefined) continue;
+        const r = sim.icons ? sim.icons[i - 1] : null;
+        if (r && r.isActive() && r.tag === sim.rpo.tag) { rpoPullAndThrow(sim, u, r, passTypeFromHold(hold)); return; }
+      }
+    }
     updateOffense(sim, u, dt); // auto dropback / handoff / kneel / spike
     return;
   }
   // ---------------------------------------------------------------- Ball carrier
   if (u.hasBall) {
     u.protectBall = ctl.held.has('protect');
+    // Speed option: pitch to the trailing back (live until the QB turns it up or crosses the line).
+    if (sim.run && sim.run.optionLive && u === sim.qb) {
+      if (sim.frame(u.x, u.y).f > 1 || sim.t > 3.2) sim.run.optionLive = false;
+      else if (ctl.pressed.has('pitch')) {
+        const rb = sim.off.find((o) => o.tag === 'RB' && o.isActive());
+        if (rb) { optionPitch(sim, u, rb); return; }
+      }
+      if (sim.run.optionLive && !moving) {
+        // Stick released: keep attacking the edge so the read stays alive.
+        const qf = sim.frame(u.x, u.y);
+        const p = sim.field(qf.f + 1.2, qf.l + sim.run.side * 3.0);
+        u.seek(p.x, p.y, sprint ? 1 : 0.9, 0.2);
+        u.anim = 'carry';
+        return;
+      }
+    }
     if (u.move && u.move.t < u.move.dur) { runnerAI(sim, u, dt); if (u.move) return; }
     const ad = sim.attackDir(u.team);
     if (ctl.pressed.has('juke_l')) { if (startMove(sim, u, 'juke', 1)) return; }

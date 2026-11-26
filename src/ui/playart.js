@@ -42,6 +42,8 @@ export function routePoints(slotF, slotL, key, releaseSide) {
   return { pts, sit: !!def.sit };
 }
 
+const run2 = (play) => play.run || {};
+
 export function offenseSVG(play, w = 220, h = 150, flip = false) {
   const form = OFF_FORMATIONS[play.form];
   if (!form) return '';
@@ -57,12 +59,26 @@ export function offenseSVG(play, w = 220, h = 150, flip = false) {
     const p = frameToSvg(a.f, a.l, w, h, flip);
     const tag = a.tag;
     let rk = play.routes ? play.routes[tag] : null;
-    if (play.type === 'run') {
+    if (play.type === 'run' && play.rpo && tag === play.rpo.tag) {
+      // RPO read receiver: his route is a live pass option.
+      const rp = routePoints(a.f, a.l, play.rpo.route, side);
+      if (rp) {
+        const sp = rp.pts.map(([f, l]) => frameToSvg(f, l, w, h, flip));
+        s += `<polyline points="${sp.map((q) => `${q.x},${q.y}`).join(' ')}" fill="none" stroke="#ffd21f" stroke-width="2" stroke-dasharray="4 2"/>`;
+        const n = sp.length;
+        if (!rp.sit) s += arrowHead(sp[n - 2].x, sp[n - 2].y, sp[n - 1].x, sp[n - 1].y, '#ffd21f');
+      }
+    } else if (play.type === 'run' && run2(play).scheme === 'option' && tag === 'RB') {
+      // Pitch relationship path
+      const pts = [[a.f, a.l], [a.f - 0.5, run2(play).side * 4.5], [1, run2(play).side * 9]].map(([f, l]) => frameToSvg(f, l, w, h, flip));
+      s += `<polyline points="${pts.map((q) => `${q.x},${q.y}`).join(' ')}" fill="none" stroke="#ff9f1c" stroke-width="2" stroke-dasharray="3 3"/>`;
+    } else if (play.type === 'run') {
       const run = play.run;
       if (tag === run.ball || (tag === 'QB' && run.ball === 'QB')) {
-        const aim = run.side * ({ dive: 0.7, iz: 2.0, oz: 5.0, iso: 1.3, power: 3.0, counter: 2.6, toss: 6.2, draw: 1.0, sneak: 0.4, qb_draw: 1.2, read: 2.0 }[run.scheme] ?? 2);
+        const aim = run.side * ({ dive: 0.7, iz: 2.0, oz: 5.0, iso: 1.3, power: 3.0, counter: 2.6, toss: 6.2, draw: 1.0, sneak: 0.4, qb_draw: 1.2, read: 2.0, option: 6.5 }[run.scheme] ?? 2);
         const pts = [[a.f, a.l]];
         if (run.scheme === 'counter') pts.push([a.f + 0.5, -run.side * 1.2]);
+        if (run.scheme === 'option') pts.push([a.f + 0.5, run.side * 3]);
         if (run.scheme === 'toss') pts.push([-4.5, run.side * 5.5]);
         else pts.push([-3, aim * 0.5]);
         pts.push([1, aim]); pts.push([6, aim * 1.1]);

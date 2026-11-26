@@ -18,9 +18,10 @@ export function setupOffenseTasks(sim) {
   if (isRun) {
     const s = (play.run.side || 1) * flipM;
     sim.run = { scheme: play.run.scheme, side: s, ballTag: play.run.ball || 'RB', handoffDone: false };
-    const aims = { dive: 0.7, iz: 2.0, oz: 5.0, iso: 1.3, power: 3.0, counter: 2.6, toss: 6.2, draw: 1.0, sneak: 0.4, qb_draw: 1.2, read: 2.0 };
+    const aims = { dive: 0.7, iz: 2.0, oz: 5.0, iso: 1.3, power: 3.0, counter: 2.6, toss: 6.2, draw: 1.0, sneak: 0.4, qb_draw: 1.2, read: 2.0, option: 6.5 };
     sim.run.aimL = s * (aims[play.run.scheme] ?? 2);
   }
+  sim.rpo = isRun && play.rpo ? { tag: play.rpo.tag, route: play.rpo.route } : null;
   if (type === 'pa') sim.playAction = true;
   sim.dropType = play.drop || 'm';
   sim.boot = play.drop === 'boot' ? (play.side || 1) * flipM : 0;
@@ -30,7 +31,9 @@ export function setupOffenseTasks(sim) {
     if (e.pos === 'QB') { e.task = { kind: 'qb' }; continue; }
     let rk = sim.hotRoutes[e.tag] || play.routes[e.tag];
     if (isRun) {
-      if (e.tag === sim.run.ballTag) e.task = { kind: 'runpath' };
+      if (sim.rpo && e.tag === sim.rpo.tag && !sim.hotRoutes[e.tag]) e.task = { kind: 'route', key: sim.rpo.route };
+      else if (sim.run.scheme === 'option' && e.tag === 'RB') e.task = { kind: 'runpath' };
+      else if (e.tag === sim.run.ballTag) e.task = { kind: 'runpath' };
       else if (e.pos === 'FB' || (e.pos === 'RB' && e.tag !== sim.run.ballTag)) e.task = { kind: 'lead' };
       else if (e.pos === 'TE' && Math.abs(e.alignL) < 6) e.task = { kind: 'runblock' };
       else e.task = { kind: 'stalk' };
@@ -111,7 +114,12 @@ export function updateOffense(sim, e, dt) {
   const t = e.task;
   if (!t) return;
   // Anyone holding the ball (other than a QB still in the pocket) runs with it.
-  if (e.hasBall && (e.pos !== 'QB' || e.qbRunner || sim.phase === 'run')) { e.blocking = false; return runnerAI(sim, e, dt); }
+  if (e.hasBall && (e.pos !== 'QB' || e.qbRunner || sim.phase === 'run')) {
+    e.blocking = false;
+    if (e === sim.qb && sim.run && sim.run.optionLive && optionRead(sim, e, dt)) return;
+    return runnerAI(sim, e, dt);
+  }
+  if (sim.run && sim.run.optionLive && e.tag === 'RB' && t.kind === 'runpath') { e.blocking = false; return runPath(sim, e, dt); }
   e.blocking = BLOCK_KINDS.has(t.kind) && !(t.kind === 'pull' && !t.turned) && !(t.kind === 'lead' && sim.frame(e.x, e.y).f < -1.5);
   if (t.kind === 'screenblock' && sim.t < 1.4) e.blocking = false;
   if (sim.carrier && sim.carrier.team === e.team && sim.carrier !== e && e.pos !== 'QB' && (sim.phase === 'run' || sim.carrier.team !== sim.offIdx)) e.blocking = true;
@@ -314,9 +322,10 @@ function cpuPassDecision(sim, qb, dt) {
     }
     if (cd && cd.pC > (hot || underFire ? 0.26 : internalClock ? 0.38 : 0.5)) { sim.throwMargin = cd.ev.margin; startThrow(sim, qb, cd.r, cd.ev.type, null); return; }
     // Scramble if there is room, otherwise throw it away or take the sack.
+    // Nothing open: take off if there is room in front (mobile QBs sooner and more often).
     const mobile = qb.r.spd > 78;
     const room = !sim.def.some((d) => d.isActive() && dist(d.x, d.y, qb.x + sim.dir * 3, qb.y) < 3);
-    if ((mobile || elapsed > 2.6) && room && sim.rng.chance(dt * (mobile ? 3.0 : 1.2))) { qb.qbRunner = true; sim.phase = 'run'; sim.playType = 'scramble'; return; }
+    if ((mobile || elapsed > 2.1) && room && sim.rng.chance(dt * (mobile ? 3.2 : 2.0))) { qb.qbRunner = true; sim.phase = 'run'; sim.playType = 'scramble'; return; }
     // Out of the pocket (bootleg/rollout) or past the internal clock with pressure
     // coming: smart QBs live to play another down.
     const outsidePocket = Math.abs(sim.frame(qb.x, qb.y).l) > 3.2;
@@ -337,6 +346,41 @@ function qbRunPlay(sim, e, dt) {
   const run = sim.run;
   const gun = sim.form.qb !== 'center';
   const scheme = run.scheme;
+  if (sim.pendingThrow) { e.setDesired(e.vx * 0.4, e.vy * 0.4); e.anim = 'throw'; return; } // RPO pull
+  if (sim.thrown) { e.stop(); if (e.animT > 0.5) e.anim = 'idle'; return; }
+  if (scheme === 'option' && e.hasBall) {
+    // Speed option: take the snap and attack the edge with the back in pitch relationship.
+    e.qbRunner = true; sim.phase = 'run'; sim.playType = 'run';
+    sim.runRecognizedT = sim.runRecognizedT || sim.t;
+    sim.stats.rusher = e.id;
+    run.optionLive = true;
+    run.optionT0 = sim.t;
+    return;
+  }
+  // Bubble/screen RPOs are decided as the snap is caught, off the overhang defender's
+  // alignment: if he isn't over the receiver, throw it right away.
+  if (sim.rpo && e.hasBall && !e.user && !run.rpoChecked && !run.handoffDone && (ROUTES[sim.rpo.route] || {}).depthClass === 'screen') {
+    run.rpoChecked = true;
+    const rec = sim.off.find((o) => o.tag === sim.rpo.tag);
+    if (rec && rec.isActive()) {
+      const pts = rec.route && rec.route.pts;
+      const win = pts && pts.length > 1 ? pts[1] : { x: rec.x, y: rec.y };
+      // The overhang defender is the one between the box and the receiver (the corner outside
+      // is the outside receiver's block).
+      let cd = Infinity;
+      const wl = Math.abs(sim.frame(win.x, win.y).l);
+      for (const d of sim.def) {
+        if (!d.isActive() || d.engaged || d.pos === 'DL') continue;
+        if (Math.abs(sim.frame(d.x, d.y).l) > wl + 1) continue;
+        cd = Math.min(cd, dist(d.x, d.y, win.x, win.y));
+      }
+      const misread = sim.rng.chance((1 - (e.r.awr ?? 70) / 100) * 0.2);
+      const ev = evalTarget(sim, e, rec);
+      const open = cd > 8 && ev && ev.margin > 0.25;
+      const pull = sim.rpoForce === 'pull' ? true : sim.rpoForce === 'give' ? false : open !== misread;
+      if (pull) { rpoPullAndThrow(sim, e, rec, 'bullet'); return; }
+    }
+  }
   if (!e.hasBall) {
     if (!sim.handedOff) { e.stop(); return; } // shotgun snap still in the air
     // Carry out the fake
@@ -380,19 +424,37 @@ function qbRunPlay(sim, e, dt) {
   }
   e.seek(mp.x, mp.y, 0.7, 0.4);
   e.anim = 'handoff';
-  const minT = scheme === 'draw' ? 0.65 : 0.3;
+  const minT = scheme === 'draw' ? 0.65 : scheme === 'read' ? 0.42 : 0.3; // zone read rides the mesh while reading the end
   const meshDist = dist(e.x, e.y, rb.x, rb.y);
   if (sim.t > minT && (meshDist < 1.25 || (sim.t > 1.1 && meshDist < 2.6))) {
+    // RPO: the CPU QB pulls it and throws if the read receiver is open.
+    if (sim.rpo && !e.user) {
+      const rec = sim.off.find((o) => o.tag === sim.rpo.tag);
+      // (sim.rpoForce lets the test lab model a human who always pulls or always gives)
+      const pull = sim.rpoForce === 'pull' ? true : sim.rpoForce === 'give' ? false : rpoRead(sim, e, rec);
+      if (rec && rec.isActive() && pull) { const ev = evalTarget(sim, e, rec); rpoPullAndThrow(sim, e, rec, ev ? ev.type : 'bullet'); return; }
+    }
     if (scheme === 'read') {
-      // Read the unblocked backside end.
+      // Read the unblocked backside end (a human QB keeps it by moving the stick).
       const end = sim.def.filter((d) => d.pos === 'DL' || d.pos === 'LB').sort((a, b) => (sim.frame(a.x, a.y).l - sim.frame(b.x, b.y).l) * run.side)[0];
       let keep = false;
-      if (end) {
+      const uc = e.user ? sim.ctl(e.team) : null;
+      if (uc && Math.hypot(uc.mx, uc.my) > 0.5) keep = true;
+      else if (end && !end.engaged) {
+        // Keep only if the end has committed to the back: squeezing inside or flowing down the line.
         const ef = sim.frame(end.x, end.y);
-        const crashing = Math.abs(ef.l) < 3.4 || (end.vy * sim.dir * -run.side) > 1.5;
-        keep = crashing && !end.engaged;
+        const sf = sim.frame(end.startX ?? end.x, end.startY ?? end.y);
+        const inward = -Math.sign(ef.l || -run.side) * end.vy * sim.dir;
+        const squeezed = Math.abs(ef.l) < Math.abs(sf.l) - 0.8;
+        const misread = sim.rng.chance((1 - (e.r.awr ?? 70) / 100) * 0.25);
+        keep = (inward > 1.2 || squeezed) !== misread;
+        // Second look: the lane outside the end has to be clean (no scraping LB or apex waiting).
+        if (keep) {
+          const lane = sim.field(1.5, ef.l - run.side * 2.5);
+          if (sim.def.some((d) => d !== end && d.isActive() && !d.engaged && dist(d.x, d.y, lane.x, lane.y) < 3.2)) keep = false;
+        }
       }
-      if (keep) { e.qbRunner = true; sim.phase = 'run'; sim.playType = 'run'; run.ballTag = 'QB'; run.aimL = -run.side * 5; sim.stats.rusher = e.id; return; }
+      if (keep) { e.qbRunner = true; sim.phase = 'run'; sim.playType = 'run'; run.ballTag = 'QB'; run.aimL = -run.side * 6.5; sim.stats.rusher = e.id; return; }
     }
     handoff(sim, e, rb);
     return;
@@ -410,6 +472,81 @@ export function handoff(sim, qb, rb) {
   sim.events.push({ t: sim.t, type: 'handoff', from: qb.id, to: rb.id });
   sim.stats.rusher = rb.id;
   qb.anim = 'handoff';
+}
+
+// Speed option read (CPU QB): pitch when the edge defender attacks the QB, keep and turn
+// upfield when he widens to take the back. Returns true while the read is still live.
+function optionRead(sim, qb, dt) {
+  const run = sim.run;
+  const s = run.side;
+  if (qb.user) return false; // a human QB steers himself and pitches with the pitch button
+  const qf = sim.frame(qb.x, qb.y);
+  const rb = sim.off.find((o) => o.tag === 'RB' && o.isActive());
+  let key = null, kd = Infinity;
+  for (const d of sim.def) {
+    if (!d.isActive() || d.engaged) continue;
+    const df = sim.frame(d.x, d.y);
+    if ((df.l - qf.l) * s < -1.5 || df.f > 6 || df.f < -3) continue;
+    const dd = dist(d.x, d.y, qb.x, qb.y);
+    if (dd < kd) { kd = dd; key = d; }
+  }
+  const rbOk = rb && !rb.engaged && (sim.frame(rb.x, rb.y).l - qf.l) * s > 1.5 && dist(rb.x, rb.y, qb.x, qb.y) < 7.5;
+  if (key && rbOk) {
+    const kf = sim.frame(key.x, key.y);
+    // Misreads happen: less aware QBs pitch late or keep into a defender.
+    const err = (1 - (qb.r.awr ?? 70) / 100) * 1.2;
+    const attacking = kd < 3.0 + err * 0.5 || ((kf.l - qf.l) * s < 1.0 && kd < 4.2);
+    if (attacking) { optionPitch(sim, qb, rb); return true; }
+    if ((kf.l - qf.l) * s > 3.2 && kd > 3.5 && sim.t > 0.9) { run.optionLive = false; return false; }
+  }
+  if (!key || Math.abs(qf.l) > 7.5 || qf.f > 1 || sim.t > 2.6) { run.optionLive = false; return false; }
+  // A short ride step first so the back can get into pitch relationship.
+  const ride = sim.t - (run.optionT0 ?? 0) < 0.3;
+  const p = sim.field(qf.f + (ride ? 0.2 : 1.2), qf.l + s * 3.0);
+  qb.seek(p.x, p.y, ride ? 0.5 : 0.95, 0.2);
+  qb.anim = 'carry';
+  return true;
+}
+
+export function optionPitch(sim, qb, rb) {
+  pitchBall(sim, qb, rb);
+  sim.run.optionLive = false;
+  sim.run.pitched = true;
+  sim.events.push({ t: sim.t, type: 'pitch', from: qb.id, to: rb.id });
+}
+
+// RPO read: watch the conflict defender nearest the throwing window. If he steps up to play
+// the run (or there is nobody there) the window behind him is open; if he stays home, hand off.
+function rpoRead(sim, qb, rec) {
+  const ev = evalTarget(sim, qb, rec);
+  if (!ev || ev.depth > 16) return false;
+  const screen = (ROUTES[sim.rpo.route] || {}).depthClass === 'screen';
+  // Quick routes: the corner on the receiver only matters if he is blanketing him;
+  // the read is the conflict defender inside. Screens need real space.
+  if (ev.margin < (screen ? 0.1 : -0.45)) return false;
+  const pts = rec.route && rec.route.pts;
+  const win = pts && pts.length ? pts[Math.min(1, pts.length - 1)] : { x: rec.x, y: rec.y };
+  let conflict = null, cd = Infinity;
+  for (const d of sim.def) {
+    if (!d.isActive() || d.engaged || d.pos === 'DL') continue;
+    if (!screen && dist(d.x, d.y, rec.x, rec.y) < 2.4) continue;
+    const dd = dist(d.x, d.y, win.x, win.y);
+    if (dd < cd) { cd = dd; conflict = d; }
+  }
+  if (!conflict || cd > 8) return screen || ev.margin > 0.1;
+  const towardLOS = -conflict.vx * sim.dir; // closing on the line of scrimmage = playing run
+  const awr = qb.r.awr ?? 70;
+  const misread = sim.rng.chance((1 - awr / 100) * 0.2);
+  return (towardLOS > 1.3 && cd > 2.2) !== misread;
+}
+
+// RPO: pull the ball from the mesh and throw to the read receiver; the back carries out the fake.
+export function rpoPullAndThrow(sim, qb, rec, type = 'bullet') {
+  sim.playType = 'pass';
+  sim.rpoThrown = true;
+  sim.run.handoffDone = true;
+  sim.events.push({ t: sim.t, type: 'rpo', by: qb.id, to: rec.id });
+  startThrow(sim, qb, rec, type, null);
 }
 
 function pitchBall(sim, qb, rb) {
@@ -443,6 +580,20 @@ function runPath(sim, e, dt) {
     e.seek(p.x, p.y, 1, 0.5); e.anim = 'run';
     return;
   }
+  if (scheme === 'option') {
+    const qb = sim.qb;
+    if (qb && qb.hasBall && run.optionLive) {
+      // Pitch relationship: a few yards outside and a step behind the QB.
+      const qf = sim.frame(qb.x, qb.y);
+      p = sim.field(qf.f - 1.6, qf.l + s * 4.2);
+      e.seek(p.x, p.y, 1, 0.3); e.anim = 'run';
+      return;
+    }
+    if (!run.pitched) { p = sim.field(2, s * 7); e.seek(p.x, p.y, 0.8, 0.5); e.anim = 'run'; return; }
+    e.anim = 'run';
+    return;
+  }
+  if (sim.rpoThrown) { p = sim.field(1.5, run.aimL); e.seek(p.x, p.y, 0.8, 0.3); e.anim = 'run'; return; } // carry out the fake
   if (scheme === 'draw' && sim.t < 0.42) { e.stop(); e.anim = 'block'; return; }
   if (scheme === 'counter' && sim.t < 0.22) { p = sim.field(sim.frame(e.x, e.y).f + 0.2, -s * 0.9); e.seek(p.x, p.y, 0.6, 0.5); e.anim = 'run'; return; }
   if (!run.handoffDone) {
@@ -625,6 +776,9 @@ function passBlock(sim, e, dt) {
 
 function runBlock(sim, e, dt) {
   e.anim = 'block';
+  // RPO line rules: linemen block at the line (no climbing past a yard) while the pass is
+  // still an option, so the QB can legally throw.
+  const rpoHold = !!(sim.rpo && sim.run && (!sim.run.handoffDone || sim.rpoThrown));
   const tgt = e.task.target;
   if (!tgt || !tgt.isActive() || (tgt.engaged && tgt.engaged !== e)) {
     // Find a new man near the play
@@ -632,12 +786,13 @@ function runBlock(sim, e, dt) {
     const cand = sim.def.filter((d) => d.isActive() && !d.engaged && dist(d.x, d.y, e.x, e.y) < 6);
     cand.sort((a, b) => dist(a.x, a.y, e.x, e.y) + dist(a.x, a.y, c.x, c.y) * 0.5 - dist(b.x, b.y, e.x, e.y) - dist(b.x, b.y, c.x, c.y) * 0.5);
     e.task.target = cand[0] || null;
-    if (!e.task.target) { const p = sim.field(sim.frame(e.x, e.y).f + 1.5, sim.frame(e.x, e.y).l); e.seek(p.x, p.y, 0.5, 1); return; }
+    if (!e.task.target) { const ef0 = sim.frame(e.x, e.y); const p = sim.field(rpoHold ? Math.min(0.6, ef0.f + 1.5) : ef0.f + 1.5, ef0.l); e.seek(p.x, p.y, 0.5, 1); return; }
   }
   const d = e.task.target;
   // Get to the play-side shoulder of the defender.
   const s = sim.run ? sim.run.side : 1;
-  const p = sim.field(sim.frame(d.x, d.y).f - 0.7, sim.frame(d.x, d.y).l + s * 0.35);
+  const df = sim.frame(d.x, d.y);
+  const p = sim.field(rpoHold ? Math.min(0.7, df.f - 0.7) : df.f - 0.7, df.l + s * 0.35);
   e.seek(p.x, p.y, 0.9, 0.4);
 }
 

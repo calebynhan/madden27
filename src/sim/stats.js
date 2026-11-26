@@ -25,6 +25,28 @@ export class BoxScore {
     while (this.quarters[team].length <= qi) { this.quarters[0].push(0); this.quarters[1].push(0); }
     this.quarters[team][qi] += pts;
   }
+  // Player of the game: a simple impact score from the box score, with a bonus for the winner.
+  playerOfGame(score) {
+    const win = score[0] > score[1] ? 0 : score[1] > score[0] ? 1 : null;
+    let best = null;
+    for (const [id, s] of this.players) {
+      const m = this.meta.get(id);
+      if (!m) continue;
+      const v = s.pyds * 0.045 + s.ptd * 4 - s.int * 4.5 + s.ryds * 0.1 + s.rtd * 6 + s.recyds * 0.1 + s.rectd * 6 + s.rec * 0.4
+        + s.tkl * 0.9 + s.sacks * 3.5 + s.defint * 5 + s.ff * 3 + s.fr * 2 + s.deftd * 6 + s.pd * 1.2 + (s.rettd || 0) * 6 + (s.kryds || 0) * 0.03 + (s.fgm || 0) * 1.5
+        - (s.fum || 0) * 2 + (m.team === win ? 3 : 0);
+      if (!best || v > best.v) best = { id, s, m, v };
+    }
+    if (!best) return null;
+    const s = best.s, parts = [];
+    if (s.att) parts.push(`${s.cmp}/${s.att}, ${s.pyds} yds, ${s.ptd} TD${s.int ? `, ${s.int} INT` : ''}`);
+    if (s.ratt) parts.push(`${s.ratt} car, ${s.ryds} yds${s.rtd ? `, ${s.rtd} TD` : ''}`);
+    if (s.rec) parts.push(`${s.rec} rec, ${s.recyds} yds${s.rectd ? `, ${s.rectd} TD` : ''}`);
+    if (s.tkl || s.sacks || s.defint) parts.push([s.tkl ? `${s.tkl} tkl` : '', s.sacks ? `${s.sacks} sack${s.sacks > 1 ? 's' : ''}` : '', s.defint ? `${s.defint} INT` : '', s.ff ? `${s.ff} FF` : ''].filter(Boolean).join(', '));
+    if (s.fgm) parts.push(`${s.fgm} FG`);
+    return { ...best.m, line: parts.filter(Boolean).join(' · ') };
+  }
+
   leaders(team) {
     let pass = null, rush = null, rec = null;
     for (const [id, s] of this.players) {

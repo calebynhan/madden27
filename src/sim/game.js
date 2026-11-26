@@ -434,6 +434,7 @@ export class Game {
 
   scoreTD(team, desc) {
     this.score[team] += 6;
+    if (this.drive && this.drive.team === team) this.finishDrive();
     this.box.addScore(team, this.quarter, 6);
     this.clockRunning = false;
     this.emit('touchdown', { team });
@@ -444,6 +445,7 @@ export class Game {
 
   scoreSafety(team) {
     this.score[team] += 2;
+    if (this.drive && this.drive.team !== team) this.finishDrive();
     this.box.addScore(team, this.quarter, 2);
     this.clockRunning = false;
     this.emit('safety', { team });
@@ -461,8 +463,45 @@ export class Game {
     this.startDrive();
   }
 
-  startDrive() { this.drive = { team: this.possession, startX: this.ballX, plays: 0, startClock: this.clock, startQ: this.quarter }; }
-  endDrive() { this.drive = null; }
+  startDrive() {
+    this.finishDrive();
+    const ts = this.box.team[this.possession];
+    this.drive = { team: this.possession, startX: this.ballX, plays: 0, startClock: this.clock, startQ: this.quarter, startScore: this.score.slice(), startBox: { punts: ts.punts, ints: ts.ints, fumLost: ts.fumLost, fga: ts.fga } };
+  }
+  endDrive() { this.finishDrive(); this.drive = null; }
+
+  // Close out the current drive: how far it went, how long it took and how it ended.
+  finishDrive() {
+    const d = this.drive;
+    if (!d || d.done) return;
+    d.done = true;
+    if (this.settings.practice) return;
+    const team = d.team, opp = 1 - team;
+    const ts = this.box.team[team];
+    const gained = this.score[team] - d.startScore[team];
+    const lost = this.score[opp] - d.startScore[opp];
+    let result;
+    if (gained >= 6) result = 'Touchdown';
+    else if (gained === 3) result = 'Field goal';
+    else if (lost >= 6) result = ts.ints > d.startBox.ints ? 'Interception — returned for a TD' : 'Fumble — returned for a TD';
+    else if (lost === 2) result = 'Safety';
+    else if (ts.ints > d.startBox.ints) result = 'Interception';
+    else if (ts.fumLost > d.startBox.fumLost) result = 'Fumble';
+    else if (ts.fga > d.startBox.fga) result = 'Missed field goal';
+    else if (ts.punts > d.startBox.punts) result = 'Punt';
+    else if (this.down > 4 || (this.lastText || '').includes('Turnover on downs')) result = 'Turnover on downs';
+    else result = this.clock <= 0 ? (this.quarter === 2 ? 'End of half' : 'End of game') : 'End of drive';
+    if (d.plays < 1 && !['Touchdown', 'Safety'].includes(result) && !result.includes('returned')) return; // kickoff/return-only "drives"
+    const dir = this.attackDir(team);
+    const endX = gained >= 6 ? this.oppGoal(team) : (d.endX ?? this.ballX);
+    const yards = Math.round((endX - d.startX) * dir);
+    const ql = this.quarterLen;
+    const elapsed = Math.max(0, this.quarter === d.startQ ? d.startClock - this.clock : d.startClock + (this.quarter - d.startQ - 1) * ql + (ql - this.clock));
+    const sum = { team, plays: d.plays, yards, time: elapsed, result };
+    this.lastDrive = sum;
+    this.log.push(`Drive (${this.teams[team].def.abbr}): ${d.plays} plays, ${yards} yards, ${formatClock(elapsed)} — ${result}.`);
+    this.emit('drive', sum);
+  }
 
   applySimPenalties(s, r) {
     // Returns { handled: bool } if a penalty replaced the play result.
@@ -498,6 +537,9 @@ export class Game {
     } else if (f.type === 'facemask') {
       if (r.turnover || r.td === off) return false;
       fromSpot = r.endX; yards = 15; auto1st = true; desc = 'Face mask';
+    } else if (f.type === 'ineligible') {
+      if (r.turnover || r.td === def || playGain < -5) return false; // defense declines
+      yards = -5; desc = 'Ineligible man downfield';
     } else if (f.type === 'grounding') {
       if (r.turnover) return false;
       lossOfDown = true; fromSpot = f.spotX; yards = Math.min(-10, (f.spotX - s.losX) * dir); desc = 'Intentional grounding';
@@ -662,6 +704,7 @@ export class Game {
     this.lastText = text.trim();
     this.log.push(`[${ordinal(Math.min(this.quarter, 5))} ${formatClock(this.clock)}] ${this.lastText}`);
     this.lastNextAction = this.next;
+    if (this.drive && this.drive.team === off && r.td === null && !r.turnover) this.drive.endX = this.ballX;
   }
 
   processConversion(s, r) {

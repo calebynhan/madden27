@@ -49,6 +49,10 @@ npm test           # headless CPU-vs-CPU games with realism stats
 | Throw to receiver | 1–5 (tap = lob, medium = touch, hold = bullet) | A B X Y RB |
 | Lead the pass | Hold a direction while releasing | Left stick |
 | Throw away | X | LB |
+| Catch type while the ball is in the air: aggressive / possession / run-after-catch | hold R / C / E | hold Y / A / X |
+| Zone read: keep it | move the stick at the mesh | left stick |
+| Speed option: pitch to the back | X | LB |
+| RPO: pull it and throw | the read receiver's key before the handoff | his button |
 | Hot route / motion / audible | H / M / B | Y / LB / X |
 | Hard count / protection slide / play art | K / L / I | — / — / LT |
 | Juke / spin / stiff arm | Q E / R / F | Right stick ← → / B / A |
@@ -76,15 +80,17 @@ The full list is in **Controls** on the main menu.
   - **Run defense**: linebackers key the back and fill; deep safeties read run at the snap and come down to alley fits (play-action pulls them up for a moment).
   - **Pressure**: pass rush with swim and bull moves, plus blitzes and spies; protection picks up rushers in its lanes, and quarterbacks see unblocked rushers and throw hot.
   - **Running**: ball carrier AI with lane vision and cutbacks; jukes, spins, stiff arms, trucks, hurdles and dives.
+  - **Option football**: zone reads (the QB reads the unblocked end), speed option with a pitch read, and RPOs where the QB reads the conflict defender and either hands off or pulls it and throws. Defenses stay honest on the RPO receiver and play the pitch man; linemen obey RPO downfield rules.
   - **Tackling**: angle, gang tackles, broken tackles, forward progress and fumbles.
-  - **Passing**: realistic drops and a read progression (quarterbacks throw on rhythm at the receiver's break, and aware ones anticipate it), a throwing motion during which the QB can still be sacked, lob/touch/bullet throws, pass placement, accuracy by depth, under pressure and on the run, contested catches, deflections and interceptions.
-- **Playbooks** (`src/data/`): about 110 offensive plays across 14 formations and 48 defensive calls (Cover 0/1/2/3/4/6, Tampa 2, 2-Man, fire zones and blitzes) across 8 fronts. Six offensive styles give each team its own identity.
+  - **Passing**: realistic drops and a read progression (quarterbacks throw on rhythm at the receiver's break, and aware ones anticipate it), a throwing motion during which the QB can still be sacked, lob/touch/bullet throws, pass placement, accuracy by depth, under pressure and on the run, aggressive / possession / run-after-catch catches, contested catches, deflections and interceptions.
+- **Playbooks** (`src/data/`): over 110 offensive plays (including RPOs, zone reads and the speed option) across 14 formations and 48 defensive calls (Cover 0/1/2/3/4/6, Tampa 2, 2-Man, fire zones and blitzes) across 8 fronts. Six offensive styles give each team its own identity.
 - **Rules**:
   - 2025/26 dynamic kickoff: landing zone, touchback at the 35, 40-yard spot on short kicks, declared onside kicks.
   - Overtime where both teams possess, then sudden death; playoff OT can't end in a tie.
   - Clock: two-minute warning, out-of-bounds restart rules, 10-second runoff, accelerated clock, timeouts.
   - Penalties: holding, pass interference, offside, false start, delay of game, intentional grounding.
 - **CPU coaching**: situational play calling, fourth-down and two-point decisions, clock management.
+- **Presentation**: broadcast-style drive summaries, scoreboard flashes, an optional PA announcer, halftime and final box scores with a Player of the Game, and instant replay.
 - **Rendering** (`src/render/`): three.js stadium and crowd, a procedurally painted field, articulated players with code-driven animations, weather and a broadcast camera.
 
 ### Realism check

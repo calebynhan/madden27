@@ -170,6 +170,7 @@ class App {
       this.audio.say(`Touchdown, ${t.name}!`);
     }
     else if (type === 'snap') this.audio.snap();
+    else if (type === 'drive') { if (this.humanCount() > 0 || this.game.isCoach(0) || this.game.isCoach(1)) this.ui.showDrive(g, data); }
     else if (type === 'twominute') { this.ui.toast('Two-Minute Warning', 2); this.audio.say('Two minute warning.'); }
     else if (type === 'timeout') this.audio.whistle();
     else if (type === 'quarter_end') this.ui.toast(`End of ${['', '1st', '2nd', '3rd', '4th'][data.quarter] || 'OT'} quarter`, 2);
