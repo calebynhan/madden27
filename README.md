@@ -97,7 +97,31 @@ The full list is in **Controls** on the main menu.
 - **Audio** (`src/audio/`): everything is synthesized in the browser, with no sound files.
   - **Broadcast booth**: play-by-play for every play, with names, yardage, field position and down and distance. A second voice adds color from the game's own stats (a receiver's catches and yards, a back's carries, the QB's line, the score after a touchdown, third-down conversions and stops). Lines are spoken by your browser's built-in voices; it prefers natural-sounding and on-device voices, so it also works offline. **Settings → Commentary**: Every play, Big plays only, or Off.
   - **Home crowd**: a layered crowd that pulls for the home team. It cheers big plays, groans at turnovers and opponent scores, and boos flags on the home team, with whistles and applause. It quiets down for the home offense and gets loud for third downs on defense, with a "de-fense" chant and claps.
+- **Players** (`tools/blender/player.py` → `assets/player.glb`, `src/render/athlete.js`): every player is a skinned 3D athlete built procedurally in Blender. It's an original design with no scanned or downloaded models. The script works in five steps:
+  - Overlapping body volumes are fused with a voxel remesh, smoothed and retopologized into clean quads.
+  - The uniform is cut into zones along straight lines (jersey, belt, pants with knee pads, socks, cleats, gloves, skin) and UV-mapped, so team colors, numbers, collar trim, sleeve stripes and pants stripes are painted per team at runtime.
+  - The body is rigged to the exact joints the game's animation drives, with automatic weights, plus "heavy" and "lean" body shapes so linemen and receivers look different.
+  - Ambient occlusion is baked into the vertex colors.
+  - The helmet is built from an actual shell (face opening, jaw flaps, padded rim, center stripe, logo patches, ear holes) with a multi-bar facemask, chin strap and an optional visor.
 - **Rendering** (`src/render/`): three.js with image-based lighting from a procedural stadium light probe (glossy clearcoat helmets reflect the stadium), an anti-aliased HDR post chain (bloom, filmic tone mapping, broadcast color grade and vignette), a physically based day sky or a starry night sky, sharp soft shadows plus contact shadows under every player, procedurally painted turf with mowing stripes, wear and a grass-grain normal map, and a full stadium of about 27,000 individually animated fans in team colors, suites, a roof canopy and scrolling LED ribbon boards. Everything is generated in code (no downloaded art) and renders on your own laptop's GPU; **Settings → Graphics** offers Auto (adapts resolution, then effects, to hold a smooth frame rate), Low (no post effects, lighter crowd), Medium and High. The crowd uses a separate shirt mask and alpha-to-coverage so the stands stay team-colored and shimmer-free at broadcast distance.
+
+### Rebuilding the player model
+
+The model is generated, not hand-made, so it can be rebuilt or restyled from the script. You need Blender 4.x (free).
+
+```bash
+blender -b --factory-startup -P tools/blender/player.py -- assets/player.glb
+```
+
+Then preview it the way the game renders it, and rebuild the game:
+
+```bash
+node tools/viewer/shoot.cjs assets/player.glb preview.png
+```
+
+```bash
+npm run build
+```
 
 ### Realism check
 

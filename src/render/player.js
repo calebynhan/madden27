@@ -1,6 +1,7 @@
 // Procedural, articulated football player model with code-driven animation.
 // Poses are flat vectors so state changes can crossfade smoothly.
 import * as THREE from 'three';
+import { athleteTemplate, makeAthlete, jerseyAtlas, pantsAtlas, tvNumberTexture, skinMaterial } from './athlete.js';
 
 const SKIN = [0x8d5524, 0xc68642, 0xe0ac69, 0xf1c27d, 0x6b3f1f, 0xa0663a, 0x4a2a12];
 
@@ -61,10 +62,11 @@ function smallNumberTexture(team, num, home) {
   return t;
 }
 
-function decalTexture(team) {
+function decalTexture(team, size = 64) {
   const cv = document.createElement('canvas');
-  cv.width = 64; cv.height = 64;
+  cv.width = size; cv.height = size;
   const g = cv.getContext('2d');
+  g.scale(size / 64, size / 64);
   g.clearRect(0, 0, 64, 64);
   g.fillStyle = team.secondary;
   g.beginPath(); g.arc(32, 32, 30, 0, Math.PI * 2); g.fill();
@@ -135,6 +137,44 @@ export class TeamLook {
     this.jerseyMats = new Map();
     this.shoulderMats = new Map();
   }
+  // Materials for the skinned athlete (vertex colors carry its baked occlusion, so these are
+  // separate from the primitive model's materials).
+  athleteMats(num, opts = {}) {
+    if (!this.am) {
+      const t = this.team, home = this.home;
+      const vc = { vertexColors: true };
+      const decal = decalTexture(t, 128);
+      decal.flipY = false; // glTF texture coordinates run top-down
+      this.am = {
+        pants: new THREE.MeshStandardMaterial({ ...vc, map: pantsAtlas(t, home), roughness: 0.5, normalMap: this.knit, normalScale: new THREE.Vector2(0.12, 0.12) }),
+        belt: new THREE.MeshStandardMaterial({ ...vc, color: home ? 0x161616 : t.secondary, roughness: 0.55 }),
+        socks: new THREE.MeshStandardMaterial({ ...vc, color: home ? t.primary : t.secondary, roughness: 0.85, normalMap: this.knit, normalScale: new THREE.Vector2(0.2, 0.2) }),
+        shoes: new THREE.MeshStandardMaterial({ ...vc, color: home ? 0x141414 : 0xf0f0f0, roughness: 0.35, metalness: 0.05 }),
+        gloves: new THREE.MeshStandardMaterial({ ...vc, color: home ? t.secondary : t.primary, roughness: 0.5 }),
+        compression: new THREE.MeshStandardMaterial({ ...vc, color: home ? 0x161616 : t.primary, roughness: 0.6 }),
+        helmet: new THREE.MeshPhysicalMaterial({ ...vc, color: t.primary, roughness: 0.3, metalness: 0.15, clearcoat: 1, clearcoatRoughness: 0.05 }),
+        helmetpad: new THREE.MeshStandardMaterial({ ...vc, color: 0x1b1c1f, roughness: 0.85 }),
+        stripe: new THREE.MeshPhysicalMaterial({ ...vc, color: t.secondary, roughness: 0.33, clearcoat: 1, clearcoatRoughness: 0.07 }),
+        decal: new THREE.MeshStandardMaterial({ map: decal, transparent: true, alphaTest: 0.05, roughness: 0.25, metalness: 0.1, polygonOffset: true, polygonOffsetFactor: -2 }),
+        eyes: new THREE.MeshStandardMaterial({ color: 0x120c0a, roughness: 0.55 }),
+        mask: new THREE.MeshStandardMaterial({ ...vc, color: home ? t.secondary : 0x9a9a9a, roughness: 0.3, metalness: 0.7 }),
+        strap: new THREE.MeshStandardMaterial({ ...vc, color: 0xefefef, roughness: 0.5 }),
+        visor: new THREE.MeshPhysicalMaterial({ color: 0x0c0e12, roughness: 0.04, metalness: 0.3, transparent: true, opacity: 0.86, clearcoat: 1 }),
+      };
+      this.jerseyAtlasMats = new Map();
+      this.tvMats = new Map();
+    }
+    if (!this.jerseyAtlasMats.has(num)) {
+      this.jerseyAtlasMats.set(num, new THREE.MeshStandardMaterial({ vertexColors: true, map: jerseyAtlas(this.team, num, this.home), roughness: 0.72, normalMap: this.knit, normalScale: new THREE.Vector2(0.25, 0.25) }));
+    }
+    const skin = skinMaterial(opts.skin ?? 0);
+    return { ...this.am, jersey: this.jerseyAtlasMats.get(num), skin, arms: opts.sleeves ? this.am.compression : skin };
+  }
+  tvMat(num) {
+    if (!this.tvMats) this.athleteMats(num);
+    if (!this.tvMats.has(num)) this.tvMats.set(num, new THREE.MeshStandardMaterial({ map: tvNumberTexture(this.team, num, this.home), transparent: true, alphaTest: 0.35, roughness: 0.7, polygonOffset: true, polygonOffsetFactor: -2 }));
+    return this.tvMats.get(num);
+  }
   jersey(num) {
     if (!this.jerseyMats.has(num)) this.jerseyMats.set(num, new THREE.MeshStandardMaterial({ map: jerseyTexture(this.team, num, this.home), roughness: 0.7, normalMap: this.knit, normalScale: new THREE.Vector2(0.28, 0.28) }));
     return this.jerseyMats.get(num);
@@ -153,9 +193,63 @@ function mesh(g, m, shadow = true) {
 
 const smooth01 = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 
+const TV_GEO = new THREE.PlaneGeometry(0.13, 0.087);
+const TOWEL_GEO = new THREE.PlaneGeometry(0.11, 0.24);
+
 export class PlayerModel {
   // opts: { skin, size, bulk, visor, sleeves, towel }
   constructor(look, num, opts = {}) {
+    // The Blender-built skinned athlete when it's loaded; the primitive model otherwise
+    if (athleteTemplate() && !opts.primitive) this.buildSkinned(look, num, opts);
+    else this.buildPrimitive(look, num, opts);
+    this.root.scale.setScalar(opts.size ?? 1);
+    this.phase = Math.random() * 6;
+    this.celeb = Math.floor(Math.random() * 6);
+    this.lastAnim = '';
+    this.animClock = 0;
+    this.blendT = 1;
+    this.cur = new Float32Array(N);
+    this.from = new Float32Array(N);
+    this.tgt = new Float32Array(N);
+    this.cur[HIPY] = 1;
+    this.moving = false;
+  }
+
+  // Skinned athlete: the bones stand in for the old rig's joint groups, so the pose code
+  // below drives both models the same way.
+  buildSkinned(look, num, opts) {
+    const w = opts.bulk ?? 1;
+    const a = makeAthlete(look.athleteMats(num, opts), { w });
+    this.skinned = a;
+    const B = a.bones;
+    this.root = a.root;
+    this.body = B.root;
+    this.hips = B.hips;
+    this.torso = B.torso;
+    this.head = B.head;
+    this.arms = [{ shoulder: B.shoulder_R, elbow: B.elbow_R, hand: B.hand_R }, { shoulder: B.shoulder_L, elbow: B.elbow_L, hand: B.hand_L }];
+    this.legs = [{ hip: B.thigh_R, knee: B.knee_R }, { hip: B.thigh_L, knee: B.knee_L }];
+    if (a.meshes.visor) a.meshes.visor.visible = !!opts.visor;
+    // Shoulder numbers on top of the pads (readable from the broadcast camera behind the play)
+    const tpl = athleteTemplate();
+    const heavy = Math.max(0, Math.min(1, (w - 1) / 0.28)), lean = Math.max(0, Math.min(1, (1 - w) / 0.15));
+    for (const s of [-1, 1]) {
+      const holder = new THREE.Group();
+      holder.position.set(s * tpl.padX * (1 + 0.18 * heavy - 0.07 * lean), tpl.padY - B.torso.position.y - B.hips.position.y + 0.004, -0.012);
+      holder.rotation.z = -s * 0.22;
+      const tv = new THREE.Mesh(TV_GEO, look.tvMat(num));
+      tv.rotation.set(-Math.PI / 2, 0, Math.PI);
+      holder.add(tv);
+      this.torso.add(holder);
+    }
+    if (opts.towel) {
+      const towel = new THREE.Mesh(TOWEL_GEO, look.mats.towel);
+      towel.position.set(-0.14 * w, -0.13, 0.17 * w);
+      this.hips.add(towel);
+    }
+  }
+
+  buildPrimitive(look, num, opts) {
     const M = look.mats;
     const w = opts.bulk ?? 1;
     const skin = new THREE.MeshStandardMaterial({ color: SKIN[(opts.skin ?? 0) % SKIN.length], roughness: 0.7 });
@@ -309,17 +403,6 @@ export class PlayerModel {
       knee.add(foot);
       this.legs.push({ hip, knee });
     }
-    this.root.scale.setScalar(opts.size ?? 1);
-    this.phase = Math.random() * 6;
-    this.celeb = Math.floor(Math.random() * 6);
-    this.lastAnim = '';
-    this.animClock = 0;
-    this.blendT = 1;
-    this.cur = new Float32Array(N);
-    this.from = new Float32Array(N);
-    this.tgt = new Float32Array(N);
-    this.cur[HIPY] = 1;
-    this.moving = false;
   }
 
   // Write a pose description into the target vector.

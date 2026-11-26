@@ -6,6 +6,7 @@ const serve = process.argv.includes('--serve');
 const opts = {
   entryPoints: ['src/main.js'], bundle: true, format: 'iife', minify: !serve, sourcemap: serve,
   outdir: 'dist', target: ['es2020'], legalComments: 'none', logLevel: 'info',
+  loader: { '.glb': 'binary' }, // the Blender-built player model is embedded in the bundle
 };
 const tpl = fs.readFileSync('src/index.html', 'utf8');
 fs.mkdirSync('dist', { recursive: true });

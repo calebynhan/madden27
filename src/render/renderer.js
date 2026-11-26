@@ -6,6 +6,7 @@ import { buildField, toX, toZ } from './field.js';
 import { buildStadium, paintBoard } from './stadium.js';
 import { Sideline } from './sideline.js';
 import { PlayerModel, TeamLook, makeRing, makeBall } from './player.js';
+import { athleteReady } from './athlete.js';
 import { createPost, buildEnvironment, makeBlobShadows } from './post.js';
 import { ANIM_LIST } from '../sim/play.js';
 import { buildRoute } from '../sim/play.js';
@@ -27,6 +28,7 @@ function disposeTree(root, geometries = true) {
   root.traverse((o) => {
     if (geometries && o.geometry && !seen.has(o.geometry)) { seen.add(o.geometry); o.geometry.dispose(); }
     if (geometries && o.isInstancedMesh) o.dispose();
+    if (o.isSkinnedMesh && o.skeleton) o.skeleton.dispose(); // bone texture
     if (o.isLight && o.dispose) o.dispose(); // frees a shadow-casting light's shadow map
     const mats = !o.material ? [] : Array.isArray(o.material) ? o.material : [o.material];
     for (const m of mats) {
@@ -95,6 +97,14 @@ export class Renderer {
     this.camMode = settings.camera || 'standard';
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    // Players made before the Blender-built model finished loading get rebuilt with it
+    athleteReady.then((t) => { if (t) this.resetModels(); });
+  }
+
+  resetModels() {
+    for (const m of this.models.values()) { this.scene.remove(m.root); disposeTree(m.root, false); }
+    this.models.clear();
+    if (this.boundSim) this.bindPlay(this.boundSim);
   }
 
   setQuality(q, init = false) {
