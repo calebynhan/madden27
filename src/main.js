@@ -3,6 +3,7 @@ import './ui/styles.css';
 import { Renderer } from './render/renderer.js';
 import { Input } from './input/input.js';
 import { Audio } from './audio/audio.js';
+import { Booth } from './audio/commentary.js';
 import { UI } from './ui/ui.js';
 import { Game } from './sim/game.js';
 import { defaultLeague } from './data/league.js';
@@ -11,16 +12,21 @@ import { RNG } from './core/rng.js';
 import { DT } from './core/constants.js';
 import { SeasonUI } from './season/season_ui.js';
 
-const DEFAULT_SETTINGS = { graphics: 'auto', showFps: false, camera: 'standard', volume: 0.7, gameSpeed: 1, autoSprint: false, showArt: true, difficulty: 1, quarterLen: 5, announcer: true, coachMode: false };
+const DEFAULT_SETTINGS = { graphics: 'auto', showFps: false, camera: 'standard', volume: 0.7, gameSpeed: 1, autoSprint: false, showArt: true, difficulty: 1, quarterLen: 5, commentary: 'all', coachMode: false };
 
 class App {
   constructor() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, this.loadSettings());
+    const saved = this.loadSettings();
+    // Older saves had an on/off announcer switch; carry "off" over to the commentary setting
+    if (saved.announcer === false && saved.commentary === undefined) saved.commentary = 'off';
+    delete saved.announcer;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     this.container = document.getElementById('app');
     this.input = new Input();
     this.audio = new Audio();
     this.audio.setVolume(this.settings.volume);
-    this.audio.announcer = this.settings.announcer;
+    this.booth = new Booth();
+    this.booth.mode = this.settings.commentary;
     this.renderer = new Renderer(this.container, this.settings);
     this.view = { camDir: 1, camMode: this.settings.camera, replay: null, followReturn: true };
     this.ui = new UI(this);
@@ -47,7 +53,7 @@ class App {
   saveSettings() { try { localStorage.setItem('g27-settings', JSON.stringify(this.settings)); } catch { /* storage unavailable */ } }
   applySettings(key) {
     if (key === 'volume') this.audio.setVolume(this.settings.volume);
-    if (key === 'announcer') this.audio.announcer = this.settings.announcer;
+    if (key === 'commentary') { this.booth.mode = this.settings.commentary; if (this.booth.mode === 'off') this.audio.voices.start([]); }
     if (key === 'camera') this.view.camMode = this.settings.camera;
     if (key === 'graphics') this.renderer.setQuality(this.settings.graphics);
     if (key === 'autoSprint') for (const s of this.input.sources()) s.autoSprint = this.settings.autoSprint;
@@ -127,8 +133,7 @@ class App {
       this.intro = { t: 0, dur: this.game.scenario ? 3.5 : 6.5 };
       this.view.intro = this.intro;
       this.ui.showIntro(this.game);
-      const A = this.game.teams[1].def, H = this.game.teams[0].def;
-      this.audio.say(this.game.scenario ? `Two minute drill. ${H.name} trail by four.` : `Welcome to ${H.city}. The ${A.name} take on the ${H.name}.`);
+      this.audio.say(this.booth.event(this.game, this.game.scenario ? 'drill' : 'welcome'));
     }
   }
 
@@ -154,43 +159,105 @@ class App {
       this.audio.whistle();
       const r = data.result;
       const s = g.sim;
-      const gain = r.turnover ? 0 : (r.endX - s.losX) * s.dir;
-      if (r.td !== null || r.stats.intBy || (r.turnover && r.stats.fumbleBy) || gain > 18) this.audio.roar(0.8);
-      // Board flashes and PA calls for the big moments
-      if (r.stats.intBy) { R.flashBoard('INTERCEPTION', '#ff4f5e', 1 - s.offIdx); this.audio.say('Intercepted!'); }
-      else if (r.turnover && r.stats.fumbleBy && s.kind === 'scrimmage') { R.flashBoard('FUMBLE', '#ff4f5e', 1 - s.offIdx); this.audio.say('Fumble! Turnover!'); }
-      else if ((s.kind === 'fg') && r.td === null) { if (r.fg) { R.flashBoard('FIELD GOAL', '#3ddc84', s.kickTeam); this.audio.say('The kick is good!'); } else this.audio.say('No good!'); }
-      else if (r.safety !== null && r.safety !== undefined) { R.flashBoard('SAFETY', '#ffcf1f', r.safety); this.audio.say('Safety!'); }
-      else if (r.playType === 'sack' && this.rng01() < 0.5) this.audio.say('Sacked!');
-      else if (g.lastText && g.lastText.includes('FIRST DOWN') && gain >= 15 && this.rng01() < 0.7) this.audio.say('First down!');
+      // Board flashes for the big moments
+      if (r.stats.intBy) R.flashBoard('INTERCEPTION', '#ff4f5e', 1 - s.offIdx);
+      else if (r.turnover && r.stats.fumbleBy && s.kind === 'scrimmage') R.flashBoard('FUMBLE', '#ff4f5e', 1 - s.offIdx);
+      else if ((s.kind === 'fg') && r.td === null && r.fg) R.flashBoard('FIELD GOAL', '#3ddc84', s.kickTeam);
+      else if (r.safety !== null && r.safety !== undefined) R.flashBoard('SAFETY', '#ffcf1f', r.safety);
+      this.crowdReact(g, s, r);
+      // The booth calls the play (and maybe adds color)
+      const c = this.booth.call(g, s, r);
+      if (c) this.audio.call(c.pbp, c.color);
     } else if (type === 'touchdown') {
-      this.audio.horn(); this.audio.roar(1);
+      this.audio.horn();
       const t = g.teams[data.team].def;
       R.flashBoard('TOUCHDOWN', t.primary, data.team);
-      this.audio.say(`Touchdown, ${t.name}!`);
     }
-    else if (type === 'snap') this.audio.snap();
+    else if (type === 'snap') {
+      this.audio.snap();
+      this.booth.snap(g);
+      this.audio.hush();
+      this.audio.chant(false);
+      if (g.sim && g.sim.kind !== 'scrimmage') this.audio.roar(0.3); // the kick is away
+      this.audio.crowd(Math.min(this.audio.base, 0.6));
+    }
+    else if (type === 'phase') this.crowdMood(g, data);
     else if (type === 'drive') { if (this.humanCount() > 0 || this.game.isCoach(0) || this.game.isCoach(1)) this.ui.showDrive(g, data); }
-    else if (type === 'twominute') { this.ui.toast('Two-Minute Warning', 2); this.audio.say('Two minute warning.'); }
+    else if (type === 'twominute') { this.ui.toast('Two-Minute Warning', 2); this.audio.queue(this.booth.event(g, 'twominute')); }
     else if (type === 'timeout') this.audio.whistle();
     else if (type === 'quarter_end') this.ui.toast(`End of ${['', '1st', '2nd', '3rd', '4th'][data.quarter] || 'OT'} quarter`, 2);
     else if (type === 'halftime') {
       if (this.humanCount() > 0) {
         this.halftime = true;
         this.ui.showBoxScore(g, { overlay: true, title: 'Halftime', buttons: [['Start Second Half', () => this.resumeHalftime(), 'primary']], onBack: () => this.resumeHalftime() });
-        this.audio.say('That will do it for the first half.');
+        this.audio.queue(this.booth.event(g, 'halftime'));
       } else this.ui.toast('Halftime', 2.5);
     }
-    else if (type === 'overtime') { this.ui.toast('Overtime!', 2.5); this.audio.say('We are headed to overtime!'); }
-    else if (type === 'penalty') { this.ui.showTicker(`FLAG: ${data.text || data.type}`); if (this.rng01() < 0.6) this.audio.say(`Flag on the play. ${data.text || ''}`); }
+    else if (type === 'overtime') { this.ui.toast('Overtime!', 2.5); this.audio.queue(this.booth.event(g, 'overtime')); }
+    else if (type === 'penalty') {
+      this.ui.showTicker(`FLAG: ${data.text || data.type}`);
+      this.audio.say(this.booth.event(g, 'penalty', data));
+      if (data.team === 0) this.audio.boo(0.55); // flag on the home team
+    }
     else if (type === 'final') {
       R.flashBoard('FINAL', '#19d3ff', g.score[0] > g.score[1] ? 0 : g.score[1] > g.score[0] ? 1 : null);
-      this.audio.say("That's the ball game!");
+      this.audio.queue(this.booth.event(g, 'final'));
+      this.audio.chant(false);
+      this.audio.roar(g.score[0] > g.score[1] ? 1 : 0.2);
       setTimeout(() => this.onFinal(g), 1800);
     }
   }
 
   rng01() { return Math.random(); }
+
+  // The stadium belongs to the home team (index 0): it reacts to how each play went for them.
+  crowdReact(g, s, r) {
+    const A = this.audio;
+    const off = s.offIdx;
+    const good = (team, amt) => (team === 0 ? A.roar(amt) : A.groan(Math.min(1, amt)));
+    if (r.safety !== null && r.safety !== undefined) return good(r.safety, 0.9);
+    if (r.td !== null && r.td !== undefined) { if (r.td === 0) A.roar(1.2); else A.groan(0.9); return; }
+    if (s.kind === 'fg' || s.kind === 'xp') {
+      const kt = s.kickTeam ?? off;
+      if (s.kind === 'xp') { if (r.fg && kt === 0) A.roar(0.35); else if (!r.fg) good(1 - kt, 0.6); return; }
+      return r.fg ? good(kt, kt === 0 ? 0.7 : 0.35) : good(1 - kt, 0.7);
+    }
+    if (s.kind === 'scrimmage') {
+      if (r.turnover) return good(1 - off, 0.9); // INT, lost fumble or turnover on downs
+      if (r.playType === 'sack') return good(1 - off, 0.65);
+      const gain = (r.endX - s.losX) * s.dir;
+      const pre = this.booth.pre;
+      const first = /FIRST DOWN/.test(g.lastText || '');
+      if (gain >= 15) return good(off, Math.min(1, 0.35 + gain / 45));
+      if (pre && pre.down >= 3) return first ? good(off, 0.45) : good(1 - off, 0.45);
+      if (first && off === 0) A.roar(0.25);
+      return;
+    }
+    // Kick returns: a big one brings the house down (or deflates it)
+    if ((s.kind === 'kickoff' || s.kind === 'punt') && r.possession !== off && !r.touchback) {
+      const rt = r.possession;
+      const ry = (r.endX - (s.catchX ?? r.endX)) * s.attackDir(rt);
+      if (ry >= 25) good(rt, Math.min(1, 0.4 + ry / 60));
+    } else if (r.possession === off && s.kind !== 'scrimmage') good(off, 0.9); // onside / muff recovered by the kicking team
+  }
+
+  // Before the snap: the home crowd quiets down for its own offense, and gets loud (and
+  // chants) when its defense needs a stop on third or fourth down.
+  crowdMood(g, data) {
+    const A = this.audio;
+    if (data.phase === 'playcall' || data.phase === 'pat_choice') {
+      A.chant(false); A.crowd(0.35);
+      if (data.phase === 'playcall') A.queue(this.booth.situation(g));
+      return;
+    }
+    if (data.phase !== 'presnap' || !g.sim) return;
+    if (data.kick || g.sim.kind !== 'scrimmage') { A.chant(false); A.crowd(0.5); return; }
+    const homeDef = g.possession === 1;
+    const close = g.quarter >= 4 && Math.abs(g.score[0] - g.score[1]) <= 8;
+    if (homeDef && g.down >= 3) { A.crowd(close ? 0.95 : 0.78); A.chant(true); }
+    else if (homeDef) { A.crowd(0.5); A.chant(false); }
+    else { A.crowd(0.24); A.chant(false); }
+  }
 
   onFinal(g) {
     if (g !== this.game) return;
@@ -202,6 +269,9 @@ class App {
   quitToMenu() {
     this.game = null;
     this.paused = false;
+    this.audio.voices.start([]); // the booth stops talking
+    this.audio.chant(false);
+    this.audio.crowd(0.3);
     this.view.replay = null;
     this.humans = [null, null];
     this.ui.hideInGame();
@@ -212,7 +282,7 @@ class App {
   togglePause() {
     if (!this.game || this.game.over) return;
     this.paused = !this.paused;
-    if (this.paused) this.ui.showPause(); else this.ui.clearScreen();
+    if (this.paused) { this.ui.showPause(); this.audio.chant(false); } else this.ui.clearScreen();
   }
 
   startReplay() {
@@ -246,6 +316,8 @@ class App {
     let dt = (t - this.last) / 1000;
     this.last = t;
     if (!(dt > 0)) dt = 0.016;
+    // The sim steps at most 0.1 s per frame; the FPS meter and Auto graphics use the real frame time
+    this.renderer.rawDt = Math.min(dt, 1);
     dt = Math.min(dt, 0.1);
     this.input.poll();
     const g = this.game || this.attract;

@@ -311,6 +311,7 @@ export class PlayerModel {
     }
     this.root.scale.setScalar(opts.size ?? 1);
     this.phase = Math.random() * 6;
+    this.celeb = Math.floor(Math.random() * 6);
     this.lastAnim = '';
     this.animClock = 0;
     this.blendT = 1;
@@ -486,8 +487,37 @@ export class PlayerModel {
         break;
       }
       case 'celebrate': {
-        T[BPY] = Math.abs(Math.sin(t * 5)) * 0.5;
-        this.pose({ hipY: 1.0, lean: -0.1, legs: [[0.2, -0.5, -0.1], [0.2, -0.5, 0.1]], arms: [[-2.9, -0.4, -0.2], [-2.9, 0.4, -0.2]], head: 0.3 });
+        // Each player has his own celebration (picked when the model is made)
+        const st = this.celeb;
+        if (st === 1) {
+          // Points to the sky, chest out
+          T[BPY] = Math.abs(Math.sin(t * 4)) * 0.03;
+          this.pose({ hipY: 1.0, lean: -0.12, legs: [[-0.08, 0.12, -0.08], [0.06, 0.08, 0.08]], arms: [[-2.95, -0.12, -0.05], [0.12, 0.25, -0.35]], head: -0.45 });
+        } else if (st === 2) {
+          // Alternating arm pumps with a hip sway
+          const a = Math.sin(t * 7.5), u0 = Math.max(0, a), u1 = Math.max(0, -a);
+          T[BRZ] = Math.sin(t * 3.75) * 0.12;
+          T[BPY] = Math.abs(a) * 0.04;
+          this.pose({ hipY: 0.96 - Math.abs(a) * 0.04, lean: 0.05, legs: [[-0.18, 0.35 + u1 * 0.2, -0.1], [-0.18, 0.35 + u0 * 0.2, 0.1]], arms: [[-0.7 - u0 * 2.0, -0.3, -1.3 + u0 * 1.0], [-0.7 - u1 * 2.0, 0.3, -1.3 + u1 * 1.0]], head: -0.2 });
+        } else if (st === 3) {
+          // Double flex, turning to show the crowd
+          const p = Math.sin(t * 5) * 0.15;
+          this.pose({ hipY: 0.97, lean: -0.18, turn: Math.sin(t * 1.6) * 0.25, legs: [[-0.1, 0.2, -0.16], [-0.1, 0.2, 0.16]], arms: [[-1.57, -1.4, -1.6 + p], [-1.57, 1.4, -1.6 + p]], head: -0.15 });
+        } else if (st === 4) {
+          // Arms out, banking side to side
+          T[BRZ] = Math.sin(t * 2.4) * 0.35;
+          T[BPY] = Math.abs(Math.sin(t * 4.8)) * 0.04;
+          this.pose({ hipY: 0.98, lean: 0.15, legs: [[-0.25, 0.4, -0.08], [0.2, 0.3, 0.08]], arms: [[0, -1.5, -0.05], [0, 1.5, -0.05]], head: -0.1 });
+        } else if (st === 5) {
+          // Big fist pump with a knee lift (pulls down fast, recovers slowly)
+          const c = (t * 1.6) % 1, k = c < 0.35 ? c / 0.35 : 1 - (c - 0.35) / 0.65;
+          this.pose({ hipY: 0.97 - k * 0.06, lean: 0.1 + k * 0.2, legs: [[-0.1, 0.25 + k * 0.2, -0.1], [-0.15 - k * 0.9, 0.3 + k * 1.1, 0.1]], arms: [[-2.5 + k * 2.0, -0.25, -0.4 - k * 1.5], [0.1, 0.3, -0.6]], head: -0.3 + k * 0.4 });
+        } else {
+          // Leaps with both arms up, tucking the legs
+          const j = Math.abs(Math.sin(t * 5));
+          T[BPY] = j * 0.5;
+          this.pose({ hipY: 1.0, lean: -0.1, legs: [[0.2, 0.2 + j * 0.6, -0.1], [0.2, 0.2 + j * 0.6, 0.1]], arms: [[-2.9, -0.4, -0.2], [-2.9, 0.4, -0.2]], head: -0.3 });
+        }
         break;
       }
       case 'qb_gun': case 'idle': case 'hold': default: {

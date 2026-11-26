@@ -182,7 +182,7 @@ export class UI {
       ['Volume', 'volume', [0, 0.25, 0.5, 0.7, 0.85, 1], (v) => `${Math.round(v * 100)}%`],
       ['Game speed', 'gameSpeed', [0.85, 1, 1.15], (v) => (v === 1 ? 'Normal' : v < 1 ? 'Slow' : 'Fast')],
       ['Auto sprint', 'autoSprint', [false, true], (v) => (v ? 'On' : 'Off')],
-      ['Announcer voice', 'announcer', [true, false], (v) => (v ? 'On' : 'Off')],
+      ['Commentary', 'commentary', ['all', 'big', 'off'], (v) => ({ all: 'Every play', big: 'Big plays only', off: 'Off' })[v] || 'Every play'],
       ['Coach mode (call plays, CPU plays them)', 'coachMode', [false, true], (v) => (v ? 'On' : 'Off')],
       ['Pass assist (open receivers glow)', 'passAssist', [true, false], (v) => (v ? 'On' : 'Off')],
       ['Play art pre-snap', 'showArt', [true, false], (v) => (v ? 'On' : 'Off')],

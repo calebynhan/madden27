@@ -131,7 +131,7 @@ export class Renderer {
   // Frame-rate tracking; in 'auto' mode the render resolution steps down when frames
   // run slow and back up when there is headroom.
   trackFrame(dt) {
-    this.fpsAcc += dt; this.fpsN++;
+    this.fpsAcc += this.rawDt || dt; this.fpsN++;
     if (this.fpsAcc < 0.5) return;
     this.fps = this.fpsN / this.fpsAcc;
     this.fpsAcc = 0; this.fpsN = 0;

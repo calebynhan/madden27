@@ -29,7 +29,7 @@ npm run dev        # live-reload server at http://localhost:8000
 ```
 
 ```bash
-npm test           # headless CPU-vs-CPU games with realism stats
+npm test           # headless CPU-vs-CPU games: realism stats, then a commentary check
 ```
 
 ## Modes
@@ -93,7 +93,10 @@ The full list is in **Controls** on the main menu.
   - Clock: two-minute warning, out-of-bounds restart rules, 10-second runoff, accelerated clock, timeouts.
   - Penalties: holding, pass interference, offside, false start, delay of game, intentional grounding.
 - **CPU coaching**: situational play calling, fourth-down and two-point decisions, clock management.
-- **Presentation**: broadcast-style drive summaries, scoreboard flashes, an optional PA announcer, halftime and final box scores with a Player of the Game, and instant replay.
+- **Presentation**: broadcast-style drive summaries, scoreboard flashes, halftime and final box scores with a Player of the Game, instant replay, and six different touchdown celebrations.
+- **Audio** (`src/audio/`): everything is synthesized in the browser, with no sound files.
+  - **Broadcast booth**: play-by-play for every play, with names, yardage, field position and down and distance. A second voice adds color from the game's own stats (a receiver's catches and yards, a back's carries, the QB's line, the score after a touchdown, third-down conversions and stops). Lines are spoken by your browser's built-in voices; it prefers natural-sounding and on-device voices, so it also works offline. **Settings → Commentary**: Every play, Big plays only, or Off.
+  - **Home crowd**: a layered crowd that pulls for the home team. It cheers big plays, groans at turnovers and opponent scores, and boos flags on the home team, with whistles and applause. It quiets down for the home offense and gets loud for third downs on defense, with a "de-fense" chant and claps.
 - **Rendering** (`src/render/`): three.js with image-based lighting from a procedural stadium light probe (glossy clearcoat helmets reflect the stadium), an anti-aliased HDR post chain (bloom, filmic tone mapping, broadcast color grade and vignette), a physically based day sky or a starry night sky, sharp soft shadows plus contact shadows under every player, procedurally painted turf with mowing stripes, wear and a grass-grain normal map, and a full stadium of about 27,000 individually animated fans in team colors, suites, a roof canopy and scrolling LED ribbon boards. Everything is generated in code (no downloaded art) and renders on your own laptop's GPU; **Settings → Graphics** offers Auto (adapts resolution, then effects, to hold a smooth frame rate), Low (no post effects, lighter crowd), Medium and High. The crowd uses a separate shirt mask and alpha-to-coverage so the stands stay team-colored and shimmer-free at broadcast distance.
 
 ### Realism check
