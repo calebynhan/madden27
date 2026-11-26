@@ -6,6 +6,7 @@ import { buildField, toX, toZ } from './field.js';
 import { buildStadium, paintBoard } from './stadium.js';
 import { Sideline } from './sideline.js';
 import { PlayerModel, TeamLook, makeRing, makeBall } from './player.js';
+import { createPost, buildEnvironment, makeBlobShadows } from './post.js';
 import { ANIM_LIST } from '../sim/play.js';
 import { buildRoute } from '../sim/play.js';
 import { zoneSpec, zoneLandmark, numberReceivers, resolveManTarget } from '../sim/align.js';
@@ -17,16 +18,39 @@ const CAM = {
   high: { back: 6, height: 28, ahead: 2 },
 };
 
+// Free the GPU memory held by a subtree that is no longer drawn (a previous game's
+// stadium, sideline and weather, or a team's uniforms). three.js re-uploads anything
+// disposed here if it is ever drawn again, so shared cached resources stay safe.
+function disposeTree(root, geometries = true) {
+  const seen = new Set();
+  const tex = (v) => { if (v && v.isTexture && !seen.has(v)) { seen.add(v); v.dispose(); } };
+  root.traverse((o) => {
+    if (geometries && o.geometry && !seen.has(o.geometry)) { seen.add(o.geometry); o.geometry.dispose(); }
+    if (geometries && o.isInstancedMesh) o.dispose();
+    if (o.isLight && o.dispose) o.dispose(); // frees a shadow-casting light's shadow map
+    const mats = !o.material ? [] : Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (seen.has(m)) continue;
+      seen.add(m);
+      for (const k of Object.keys(m)) tex(m[k]);
+      if (m.uniforms) for (const k of Object.keys(m.uniforms)) tex(m.uniforms[k] && m.uniforms[k].value);
+      m.dispose();
+    }
+  });
+}
+
 export class Renderer {
   constructor(container, settings = {}) {
     this.container = container;
     this.settings = settings;
     const quality = settings.graphics || 'auto';
     this.quality = quality;
-    this.r = new THREE.WebGLRenderer({ antialias: quality !== 'low', powerPreference: 'high-performance' });
+    // No canvas MSAA: medium/high/auto anti-alias inside the post chain's own multisampled
+    // HDR target (cheaper than also multisampling the backbuffer), low skips it entirely.
+    this.r = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     // Resolution: fixed per quality level, or adaptive ('auto') to hold a smooth frame rate.
     this.resScale = 1;
-    this.fps = 60; this.fpsAcc = 0; this.fpsN = 0; this.slowT = 0; this.fastT = 0;
+    this.fps = 60; this.fpsAcc = 0; this.fpsN = 0; this.slowT = 0; this.fastT = 0; this.autoDrop = 0;
     this.setQuality(quality, true);
     this.r.outputColorSpace = THREE.SRGBColorSpace;
     this.r.toneMapping = THREE.ACESFilmicToneMapping;
@@ -36,7 +60,9 @@ export class Renderer {
     container.appendChild(this.r.domElement);
     this.r.domElement.className = 'game-canvas';
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(46, 1, 0.3, 1200);
+    this.camera = new THREE.PerspectiveCamera(46, 1, 0.3, 1600);
+    this.blobs = makeBlobShadows(this.scene);
+    this.post = null;
     this.camPos = new THREE.Vector3(-20, 12, 0);
     this.camLook = new THREE.Vector3(0, 0, 0);
     this.models = new Map();
@@ -75,6 +101,7 @@ export class Renderer {
     const dpr = window.devicePixelRatio || 1;
     this.quality = q;
     this.autoQ = q === 'auto';
+    this.autoDrop = 0;
     this.baseRatio = q === 'low' ? 1 : q === 'high' ? Math.min(dpr, 2) : q === 'auto' ? Math.min(dpr, 1.5) : Math.min(dpr, 1.25);
     this.resScale = 1;
     this.r.setPixelRatio(this.baseRatio);
@@ -83,7 +110,22 @@ export class Renderer {
       this.r.shadowMap.enabled = shadows;
       if (!init && this.scene) this.scene.traverse((o) => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { m.needsUpdate = true; }); });
     }
-    if (!init) this.resize();
+    if (!init) { this.rebuildPost(); this.resize(); }
+  }
+
+  // Effects chain for medium/high/auto (low renders straight to the screen).
+  rebuildPost() {
+    if (this.post) {
+      for (const p of this.post.composer.passes) if (p.dispose) p.dispose();
+      this.post.composer.dispose();
+      this.post = null;
+    }
+    if (!this.scene) return;
+    const q = this.quality === 'auto' ? 'medium' : this.quality;
+    this.postNight = !!this.night;
+    this.post = createPost(this.r, this.scene, this.camera, q, this.postNight);
+    if (this.post && this.autoDrop >= 1) this.post.bloom.enabled = false;
+    if (this.post && this.w) { this.post.composer.setPixelRatio(this.r.getPixelRatio()); this.post.composer.setSize(this.w, this.h); }
   }
 
   // Frame-rate tracking; in 'auto' mode the render resolution steps down when frames
@@ -97,7 +139,18 @@ export class Renderer {
     this.slowT = this.fps < 45 ? this.slowT + 0.5 : 0;
     this.fastT = this.fps > 57 ? this.fastT + 0.5 : 0;
     if (this.slowT >= 2 && this.resScale > 0.55) { this.resScale = Math.max(0.55, this.resScale - 0.15); this.slowT = 0; this.applyScale(); }
+    else if (this.slowT >= 4 && this.autoDrop < 2) { this.autoDrop++; this.slowT = 0; this.applyDrop(); }
     else if (this.fastT >= 10 && this.resScale < 1) { this.resScale = Math.min(1, this.resScale + 0.1); this.fastT = 0; this.applyScale(); }
+  }
+
+  // Still slow at the lowest resolution: shed the costliest effects (bloom, then the
+  // shadow map; the soft contact shadows under players stay on).
+  applyDrop() {
+    if (this.autoDrop >= 1 && this.post) this.post.bloom.enabled = false;
+    if (this.autoDrop >= 2 && this.r.shadowMap.enabled) {
+      this.r.shadowMap.enabled = false;
+      this.scene.traverse((o) => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { m.needsUpdate = true; }); });
+    }
   }
 
   applyScale() { this.r.setPixelRatio(Math.max(0.5, this.baseRatio * this.resScale)); this.resize(); }
@@ -108,11 +161,12 @@ export class Renderer {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.w = w; this.h = h;
+    if (this.post) { this.post.composer.setPixelRatio(this.r.getPixelRatio()); this.post.composer.setSize(w, h); }
   }
 
   setupGame(game) {
-    // Clear previous stadium
-    if (this.world) this.scene.remove(this.world);
+    // Clear the previous stadium and free its GPU memory
+    if (this.world) { this.scene.remove(this.world); disposeTree(this.world); }
     this.world = new THREE.Group();
     this.scene.add(this.world);
     const home = game.teams[0].def, away = game.teams[1].def;
@@ -120,36 +174,50 @@ export class Renderer {
     const night = game.settings.time === 'night';
     this.night = night;
     const holder = { add: (o) => this.world.add(o) };
-    this.fieldInfo = buildField(holder, home, { weather: game.weather.kind, hi: this.quality === 'high' });
-    this.stadium = buildStadium(holder, home, away, { night });
+    this.fieldInfo = buildField(holder, home, { weather: game.weather.kind, hi: this.quality === 'high', aniso: this.r.capabilities.getMaxAnisotropy() });
+    this.stadium = buildStadium(holder, home, away, { night, lite: this.quality === 'low' });
     this.sideline = new Sideline(holder, home, away);
     this.boardT = 0;
     this.boardFlash = null;
     this.game = game;
-    // Lighting
-    const hemi = new THREE.HemisphereLight(night ? 0x8899bb : 0xcfe3ff, 0x2a4a22, night ? 0.55 : 0.75);
+    // Lighting: image-based light from a procedural stadium probe (reflections + bounce)
+    // plus a key light that casts the shadows (the sun, or the light banks at night).
+    if (this.envTex) this.envTex.dispose();
+    this.envTex = buildEnvironment(this.r, night);
+    this.scene.environment = this.envTex;
+    this.scene.environmentIntensity = night ? 0.8 : 0.95;
+    this.r.toneMappingExposure = night ? 1.0 : 0.9;
+    const hemi = new THREE.HemisphereLight(night ? 0x8899bb : 0xcfe3ff, 0x2a4a22, night ? 0.22 : 0.3);
     this.world.add(hemi);
-    const sun = new THREE.DirectionalLight(night ? 0xfff4e0 : 0xfff2dc, night ? 1.6 : 2.2);
+    const sun = new THREE.DirectionalLight(night ? 0xfff6e8 : 0xfff1d8, night ? 2.3 : 2.7);
     sun.position.set(-30, 70, 25);
     sun.castShadow = this.quality !== 'low';
-    const sm = this.quality === 'high' ? 2048 : 1024;
+    const sm = this.quality === 'high' ? 4096 : 2048;
     sun.shadow.mapSize.set(sm, sm);
     const sc = sun.shadow.camera;
-    sc.left = -35; sc.right = 35; sc.top = 35; sc.bottom = -35; sc.near = 10; sc.far = 200;
-    sun.shadow.bias = -0.0008;
+    sc.left = -42; sc.right = 42; sc.top = 42; sc.bottom = -42; sc.near = 10; sc.far = 220;
+    sun.shadow.bias = -0.0004;
+    sun.shadow.normalBias = 0.03;
     this.sun = sun;
     this.world.add(sun);
     this.world.add(sun.target);
-    if (night) { const fill = new THREE.AmbientLight(0xffffff, 0.25); this.world.add(fill); }
+    if (night) {
+      // Second light bank from the far side: the classic multi-shadow night-game look.
+      const bank = new THREE.DirectionalLight(0xe8f0ff, 0.9);
+      bank.position.set(35, 60, -30);
+      this.world.add(bank);
+    }
     this.scene.fog = wx === 'snow' ? new THREE.Fog(0xcfd6e0, 30, 160) : wx === 'rain' ? new THREE.Fog(0x7d8790, 40, 220) : new THREE.Fog(night ? 0x0b1020 : 0xb8cde0, 250, 900);
-    this.looks = [new TeamLook(home, true), new TeamLook(away, false)];
-    for (const m of this.models.values()) this.scene.remove(m.root);
+    // Previous uniforms: free materials and number textures (geometry is cached and shared)
+    for (const m of this.models.values()) { this.scene.remove(m.root); disposeTree(m.root, false); }
     this.models.clear();
+    this.looks = [new TeamLook(home, true), new TeamLook(away, false)];
     this.setupWeather(wx);
+    if (!this.post || this.postNight !== night) this.rebuildPost();
   }
 
   setupWeather(kind) {
-    if (this.weatherFx) { this.scene.remove(this.weatherFx.obj); this.weatherFx = null; }
+    if (this.weatherFx) { this.scene.remove(this.weatherFx.obj); disposeTree(this.weatherFx.obj); this.weatherFx = null; }
     if (kind !== 'rain' && kind !== 'snow') return;
     const n = kind === 'rain' ? 4000 : 2500;
     const pos = new Float32Array(n * 3);
@@ -172,7 +240,7 @@ export class Renderer {
       m = new PlayerModel(this.looks[e.team], p.num, {
         skin: id % 7,
         size: clamp((p.ht || 74) / 74, 0.9, 1.12),
-        bulk: clamp(0.85 + ((p.wt || 220) - 190) / 300, 0.85, 1.28),
+        bulk: Math.round(clamp(0.85 + ((p.wt || 220) - 190) / 300, 0.85, 1.28) * 50) / 50, // stepped: shared cached body meshes
         visor: id % 5 === 0 || (skill && id % 3 === 1),
         sleeves: id % 3 === 0,
         towel: skill && id % 4 === 1,
@@ -312,7 +380,9 @@ export class Renderer {
       // Crowd bounces with excitement
       const ex = view.excite || 0;
       const tt = performance.now() / 1000;
-      for (let i = 0; i < this.stadium.crowdTex.length; i++) this.stadium.crowdTex[i].offset.y = ex > 0.45 ? Math.sin(tt * 13 + i) * 0.012 * (ex - 0.4) : 0;
+      const st = this.stadium;
+      if (st.crowdMat) { st.crowdMat.uniforms.uTime.value = tt; st.crowdMat.uniforms.uExcite.value = ex; st.crowdMat.uniforms.uCut.value = this.post ? 0.02 : 0.5; }
+      for (const rt of st.ribbons || []) rt.offset.x = (rt.offset.x + dt * 0.02) % 1;
     }
     // Lines
     const showLines = !!(game && sim && sim.kind === 'scrimmage' && !view.replay);
@@ -349,8 +419,43 @@ export class Renderer {
       this.sun.position.set(this.camLook.x - 30, 70, this.camLook.z + 25);
       this.sun.target.position.copy(this.camLook);
     }
-    this.r.render(this.scene, this.camera);
+    this.updateBlobs(sim, view);
+    if (this.post) this.post.composer.render(dt);
+    else this.r.render(this.scene, this.camera);
     this.trackFrame(dt);
+  }
+
+  // Contact shadows under every visible player, and a small one under a ball in flight.
+  updateBlobs(sim) {
+    const im = this.blobs;
+    if (!im) return;
+    const mtx = this._blobM || (this._blobM = new THREE.Matrix4());
+    const q = this._blobQ || (this._blobQ = new THREE.Quaternion());
+    const pos = this._blobP || (this._blobP = new THREE.Vector3());
+    const scl = this._blobS || (this._blobS = new THREE.Vector3());
+    let n = 0;
+    if (sim) {
+      for (const m of this.models.values()) {
+        if (!m.root.visible) continue;
+        const down = m.lastAnim === 'down' || m.lastAnim === 'fall' || m.lastAnim === 'dive';
+        const k = (m.root.scale.x || 1) * (down ? 1.75 : 1.2);
+        pos.set(m.root.position.x, 0.03, m.root.position.z);
+        scl.set(k, 1, down ? k * 0.75 : k);
+        mtx.compose(pos, q, scl);
+        im.setMatrixAt(n++, mtx);
+        if (n >= 63) break;
+      }
+      const b = this.ballModel;
+      if (b && b.visible && b.position.y > 0.6 && n < 64) {
+        const k = Math.max(0.25, 0.7 - b.position.y * 0.02);
+        pos.set(b.position.x, 0.03, b.position.z);
+        scl.set(k, 1, k);
+        mtx.compose(pos, q, scl);
+        im.setMatrixAt(n++, mtx);
+      }
+    }
+    im.count = n;
+    im.instanceMatrix.needsUpdate = true;
   }
 
   syncEntities(sim, dt, alpha = 1) {

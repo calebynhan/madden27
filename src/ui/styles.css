@@ -64,7 +64,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .ctl-pick button.on { background: var(--accent); color: #002433; border-color: var(--accent); }
 
 /* ---------- Score bug ---------- */
-#hud { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; align-items: stretch; height: 46px; border-radius: 8px; overflow: hidden; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6); font-weight: 800; pointer-events: none; }
+#hud { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; align-items: stretch; height: 46px; border-radius: 8px; overflow: hidden; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6); font-weight: 800; pointer-events: none; white-space: nowrap; }
 .sb-team { display: flex; align-items: center; gap: 8px; padding: 0 12px; min-width: 132px; position: relative; }
 .sb-team .abbr { font-size: 18px; letter-spacing: 0.05em; }
 .sb-team .pts { font-size: 26px; margin-left: auto; font-variant-numeric: tabular-nums; }

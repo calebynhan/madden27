@@ -11,6 +11,61 @@ function shade(hex, k) {
   return `#${c.getHexString()}`;
 }
 
+// Smooth value noise on a coarse grid (cell = size pixels), for natural turf variation.
+function valueNoise(W, H, size, rnd) {
+  const gw = Math.ceil(W / size) + 2, gh = Math.ceil(H / size) + 2;
+  const grid = new Float32Array(gw * gh);
+  for (let i = 0; i < grid.length; i++) grid[i] = rnd() * 2 - 1;
+  const cw = gw - 1, ch = gh - 1;
+  return (x, y) => {
+    const fx = x / size, fy = y / size;
+    const fix = Math.floor(fx), fiy = Math.floor(fy);
+    let tx = fx - fix, ty = fy - fiy;
+    tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+    // Wrap so any coordinate is valid (scaled lookups go past the canvas)
+    const ix = ((fix % cw) + cw) % cw, iy = ((fiy % ch) + ch) % ch;
+    const a = grid[iy * gw + ix], b = grid[iy * gw + ix + 1], c = grid[(iy + 1) * gw + ix], d = grid[(iy + 1) * gw + ix + 1];
+    return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+  };
+}
+
+// Tileable grass-blade normal map: gives the turf grain where the light catches it.
+export function makeGrassNormalMap() {
+  const N = 256;
+  const h = new Float32Array(N * N);
+  let seed = 4242;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  // Blades: short random strokes accumulated into a height field (wrapping edges)
+  for (let k = 0; k < 2600; k++) {
+    const x0 = rnd() * N, y0 = rnd() * N;
+    const a = (rnd() - 0.5) * 1.2 + Math.PI / 2;
+    const len = 3 + rnd() * 6, amp = 0.5 + rnd() * 0.5;
+    for (let t = 0; t < len; t += 0.5) {
+      const x = Math.floor(x0 + Math.cos(a) * t + N) % N, y = Math.floor(y0 + Math.sin(a) * t + N) % N;
+      h[y * N + x] += amp * (1 - t / len);
+    }
+  }
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = N;
+  const g = cv.getContext('2d');
+  const img = g.createImageData(N, N);
+  const at = (x, y) => h[((y + N) % N) * N + ((x + N) % N)];
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const dx = (at(x + 1, y) - at(x - 1, y)) * 0.9, dy = (at(x, y + 1) - at(x, y - 1)) * 0.9;
+    const l = Math.hypot(dx, dy, 1);
+    const i = (y * N + x) * 4;
+    img.data[i] = (-dx / l * 0.5 + 0.5) * 255;
+    img.data[i + 1] = (dy / l * 0.5 + 0.5) * 255;
+    img.data[i + 2] = (1 / l * 0.5 + 0.5) * 255;
+    img.data[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.NoColorSpace;
+  return t;
+}
+
 export function makeFieldTexture(homeTeam, opts = {}) {
   const PX = opts.hi ? 40 : 30; // pixels per yard
   const W = Math.round(FIELD_LENGTH * PX), H = Math.round(FIELD_WIDTH * PX);
@@ -18,23 +73,37 @@ export function makeFieldTexture(homeTeam, opts = {}) {
   cv.width = W; cv.height = H;
   const g = cv.getContext('2d');
   const weather = opts.weather || 'clear';
-  const grassA = weather === 'snow' ? '#5f8f63' : '#2f7d36';
-  const grassB = weather === 'snow' ? '#58875c' : '#2a7131';
-  // Mowing stripes every 5 yards
-  for (let i = 0; i < 24; i++) {
-    g.fillStyle = i % 2 ? grassA : grassB;
-    g.fillRect(i * 5 * PX, 0, 5 * PX + 1, H);
-  }
-  // Grass noise
-  const img = g.getImageData(0, 0, W, H);
+  const snow = weather === 'snow';
+  // Turf: alternating 5-yard mowing stripes, broad patches, fine grain and wear between
+  // the hashes, all computed per pixel.
+  const A = snow ? [92, 140, 98] : [36, 104, 42], B = snow ? [84, 130, 90] : [46, 122, 52];
+  const img = g.createImageData(W, H);
   const d = img.data;
   let seed = 1234567;
   const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
-  for (let i = 0; i < d.length; i += 4) {
-    const n = (rnd() - 0.5) * 18;
-    d[i] = Math.max(0, Math.min(255, d[i] + n * 0.6));
-    d[i + 1] = Math.max(0, Math.min(255, d[i + 1] + n));
-    d[i + 2] = Math.max(0, Math.min(255, d[i + 2] + n * 0.5));
+  const big = valueNoise(W, H, PX * 7, rnd), mid = valueNoise(W, H, PX * 1.6, rnd);
+  const hashTop = HASH_LEFT_Y * PX, hashBot = HASH_RIGHT_Y * PX;
+  for (let y = 0; y < H; y++) {
+    // Wear: the middle of the field (between the hashes) is a touch lighter and drier
+    const wy = y > hashTop && y < hashBot ? 1 - Math.abs((y - (hashTop + hashBot) / 2) / ((hashBot - hashTop) / 2)) ** 2 : 0;
+    for (let x = 0; x < W; x++) {
+      const stripe = Math.floor(x / (5 * PX)) % 2;
+      const base = stripe ? A : B;
+      // Soft stripe edges
+      const ex = (x % (5 * PX)) / PX;
+      const edge = ex < 0.25 ? 0.5 + ex * 2 : ex > 4.75 ? 0.5 + (5 - ex) * 2 : 1;
+      const other = stripe ? B : A;
+      const n = big(x, y) * 0.07 + mid(x, y) * 0.05 + (rnd() - 0.5) * 0.09;
+      const wear = wy * 0.06 * (0.6 + 0.4 * mid(x * 1.7, y * 1.7));
+      const i = (y * W + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        let v = base[c] * edge + other[c] * (1 - edge);
+        v *= 1 + n;
+        v += wear * (c === 0 ? 60 : c === 1 ? 35 : 10);
+        d[i + c] = v < 0 ? 0 : v > 255 ? 255 : v;
+      }
+      d[i + 3] = 255;
+    }
   }
   g.putImageData(img, 0, 0);
   // End zones
@@ -131,7 +200,7 @@ export function makeFieldTexture(homeTeam, opts = {}) {
   g.restore();
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
+  tex.anisotropy = opts.aniso || 8; // crisp lines all the way down the field
   tex.generateMipmaps = true;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   return tex;
@@ -140,13 +209,18 @@ export function makeFieldTexture(homeTeam, opts = {}) {
 export function buildField(scene, homeTeam, opts) {
   const group = new THREE.Group();
   const tex = makeFieldTexture(homeTeam, opts);
-  const fieldMat = new THREE.MeshStandardMaterial({ map: tex, roughness: opts.weather === 'rain' ? 0.45 : 0.92, metalness: 0 });
+  const grassN = makeGrassNormalMap();
+  grassN.repeat.set(FIELD_LENGTH / 1.3, FIELD_WIDTH / 1.3);
+  grassN.anisotropy = opts.aniso || 8;
+  const fieldMat = new THREE.MeshStandardMaterial({ map: tex, normalMap: grassN, normalScale: new THREE.Vector2(0.55, 0.55), roughness: opts.weather === 'rain' ? 0.5 : 0.95, metalness: 0, envMapIntensity: 0.45 });
   const field = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_LENGTH, FIELD_WIDTH), fieldMat);
   field.rotation.x = -Math.PI / 2;
   field.receiveShadow = true;
   group.add(field);
   // Surrounding turf / sideline area with a white border
-  const outer = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_LENGTH + 30, FIELD_WIDTH + 28), new THREE.MeshStandardMaterial({ color: opts.weather === 'snow' ? 0x6f8f72 : 0x24602a, roughness: 1 }));
+  const outerN = grassN.clone();
+  outerN.repeat.set((FIELD_LENGTH + 30) / 1.3, (FIELD_WIDTH + 28) / 1.3);
+  const outer = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_LENGTH + 30, FIELD_WIDTH + 28), new THREE.MeshStandardMaterial({ color: opts.weather === 'snow' ? 0x6f8f72 : 0x1f5a26, normalMap: outerN, normalScale: new THREE.Vector2(0.5, 0.5), roughness: 1, envMapIntensity: 0.4 }));
   outer.rotation.x = -Math.PI / 2;
   outer.position.y = -0.02;
   outer.receiveShadow = true;

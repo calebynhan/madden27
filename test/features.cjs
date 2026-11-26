@@ -19,7 +19,7 @@ const path = require('path');
   const st = () => page.evaluate(() => {
     const a = window.__app, g = a.game; if (!g) return null; const s = g.sim; const user = a.humans.findIndex(Boolean);
     const u = s && s.userEnt ? s.userEnt[user] : null;
-    return { phase: g.phase, poss: g.possession, user, kind: s && s.kind, simPhase: s && s.phase, qbBall: s && s.qb && s.qb.hasBall, thrown: s && s.thrown, pending: !!(s && s.pendingThrow), to: g.timeouts[user], km: !!a.ui.km, popup: a.ui.popup ? a.ui.popup.el.querySelector('h2').textContent : null, pc: !!(a.ui.pcState[user] && !a.ui.pcState[user].done), assign: u && u.assign ? u.assign.t : null, shade: s && s.covAdj ? s.covAdj.shade : null, over: g.over };
+    return { phase: g.phase, poss: g.possession, user, kind: s && s.kind, simPhase: s && s.phase, qbBall: s && s.qb && s.qb.hasBall, thrown: s && s.thrown, pending: !!(s && s.pendingThrow), simT: s ? s.t : 0, throwT: s ? s.throwT : null, to: g.timeouts[user], km: !!a.ui.km, popup: a.ui.popup ? a.ui.popup.el.querySelector('h2').textContent : null, pc: !!(a.ui.pcState[user] && !a.ui.pcState[user].done), assign: u && u.assign ? u.assign.t : null, shade: s && s.covAdj ? s.covAdj.shade : null, over: g.over };
   });
   let plays = 0;
   for (let i = 0; i < 900 && (plays < 14 || results.throwWindupMs === null || !results.driveCard) && plays < 45; i++) {
@@ -60,10 +60,12 @@ const path = require('path');
       await page.waitForTimeout(1700);
       const s2 = await st();
       if (s2 && s2.qbBall && !s2.thrown && results.throwWindupMs === null) {
-        const t0 = Date.now();
+        // Measured in game time (press -> ball out), so a slow software renderer in CI
+        // (which runs the 60 Hz sim below real time) doesn't skew the result.
+        const t0 = Date.now(), simT0 = s2.simT;
         await page.keyboard.down('Digit1'); await page.waitForTimeout(60); await page.keyboard.up('Digit1');
         let sawPending = false;
-        for (let k = 0; k < 40; k++) { const s3 = await st(); if (s3.pending) sawPending = true; if (s3.thrown) { results.throwWindupMs = { ms: Date.now() - t0, sawPending }; break; } await page.waitForTimeout(15); }
+        for (let k = 0; k < 80; k++) { const s3 = await st(); if (s3.pending) sawPending = true; if (s3.thrown) { results.throwWindupMs = { ms: Math.round(1000 * (s3.throwT - simT0)), wallMs: Date.now() - t0, sawPending }; break; } await page.waitForTimeout(15); }
       }
       plays++;
     } else if (s.phase === 'post') { plays++; await page.keyboard.press('Space'); }
@@ -74,7 +76,7 @@ const path = require('path');
   await page.waitForTimeout(500);
   await page.keyboard.press('Enter');
   let lastSnapPhase = null;
-  for (let i = 0; i < 160; i++) {
+  for (let i = 0; i < 700 && results.coachAutoSnaps < 3; i++) {
     const s = await page.evaluate(() => { const a = window.__app, g = a.game, sm = g.sim; return { phase: g.phase, coach: g.isCoach(0), pc: !!(a.ui.pcState[0] && !a.ui.pcState[0].done), popup: !!a.ui.popup, simPhase: sm && sm.phase, kind: sm && sm.kind, userEnt: sm && sm.userEnt ? !!sm.userEnt[0] : false }; });
     if (!s.coach) { results.coachUserEnt = 'coach flag off'; break; }
     if (s.popup) await page.keyboard.press('Enter');

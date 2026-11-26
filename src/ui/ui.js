@@ -342,7 +342,7 @@ export class UI {
     if (!r) { if (this.fpsEl) this.fpsEl.style.display = 'none'; return; }
     if (!this.fpsEl) { this.fpsEl = h('div', 'fps-meter'); this.root.appendChild(this.fpsEl); }
     this.fpsEl.style.display = 'block';
-    const txt = `${Math.round(r.fps)} FPS${r.autoQ ? ` · ${Math.round(r.resScale * 100)}% res` : ''}`;
+    const txt = `${Math.round(r.fps)} FPS${r.autoQ ? ` · ${Math.round(r.resScale * 100)}% res${r.autoDrop ? ' · lite fx' : ''}` : ''}`;
     if (txt !== this.fpsTxt) { this.fpsTxt = txt; this.fpsEl.textContent = txt; }
   }
 

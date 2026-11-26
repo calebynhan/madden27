@@ -12,7 +12,7 @@ It is built around real football: 11-on-11 simulation, real schemes and playbook
 
 - Chrome, Edge, Firefox or Safari (current versions) with WebGL enabled.
 - Plug in an Xbox or PlayStation controller for the best experience (press any button once so the browser sees it). The keyboard works for everything too.
-- Graphics default to **Auto**, which lowers the render resolution if your laptop can't hold a smooth frame rate and raises it again when there's headroom. You can also pick Low/Medium/High, and turn on **Settings → Show FPS** to see the frame rate.
+- Graphics default to **Auto**, which lowers the render resolution if your laptop can't hold a smooth frame rate and raises it again when there's headroom; if it's still slow at the lowest resolution it switches off bloom and then the shadow map (the FPS meter shows "lite fx"). You can also pick Low/Medium/High, and turn on **Settings → Show FPS** to see the frame rate.
 
 **From source** (needs Node 18+):
 
@@ -94,7 +94,7 @@ The full list is in **Controls** on the main menu.
   - Penalties: holding, pass interference, offside, false start, delay of game, intentional grounding.
 - **CPU coaching**: situational play calling, fourth-down and two-point decisions, clock management.
 - **Presentation**: broadcast-style drive summaries, scoreboard flashes, an optional PA announcer, halftime and final box scores with a Player of the Game, and instant replay.
-- **Rendering** (`src/render/`): three.js stadium and crowd, a procedurally painted field, articulated players with code-driven animations, weather and a broadcast camera.
+- **Rendering** (`src/render/`): three.js with image-based lighting from a procedural stadium light probe (glossy clearcoat helmets reflect the stadium), an anti-aliased HDR post chain (bloom, filmic tone mapping, broadcast color grade and vignette), a physically based day sky or a starry night sky, sharp soft shadows plus contact shadows under every player, procedurally painted turf with mowing stripes, wear and a grass-grain normal map, and a full stadium of about 27,000 individually animated fans in team colors, suites, a roof canopy and scrolling LED ribbon boards. Everything is generated in code (no downloaded art) and renders on your own laptop's GPU; **Settings → Graphics** offers Auto (adapts resolution, then effects, to hold a smooth frame rate), Low (no post effects, lighter crowd), Medium and High. The crowd uses a separate shirt mask and alpha-to-coverage so the stands stay team-colored and shimmer-free at broadcast distance.
 
 ### Realism check
 

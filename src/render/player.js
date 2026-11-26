@@ -79,36 +79,68 @@ function decalTexture(team) {
   return t;
 }
 
+// Knit jersey fabric: a fine tiled mesh pattern as a normal map.
+let knitTex = null;
+function fabricNormalMap() {
+  if (knitTex) return knitTex;
+  const N = 64;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = N;
+  const g = cv.getContext('2d');
+  const img = g.createImageData(N, N);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    // Rows of small raised cells (athletic mesh)
+    const cx = (x % 8) - 3.5, cy = (y % 6) - 2.5;
+    const dx = -cx / 4, dy = cy / 3;
+    const l = Math.hypot(dx, dy, 1);
+    const i = (y * N + x) * 4;
+    img.data[i] = (dx / l * 0.5 + 0.5) * 255;
+    img.data[i + 1] = (dy / l * 0.5 + 0.5) * 255;
+    img.data[i + 2] = (1 / l * 0.5 + 0.5) * 255;
+    img.data[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  knitTex = new THREE.CanvasTexture(cv);
+  knitTex.wrapS = knitTex.wrapT = THREE.RepeatWrapping;
+  knitTex.repeat.set(6, 4);
+  knitTex.colorSpace = THREE.NoColorSpace;
+  return knitTex;
+}
+
 export class TeamLook {
   constructor(team, home) {
     this.team = team;
     this.home = home;
     const pant = home ? (team.pants || '#e9e9e4') : team.primary;
     const pantStripe = home ? team.primary : team.secondary;
+    // PBR materials: clearcoat helmets reflect the stadium; fabrics are matte with a knit grain.
+    const knit = fabricNormalMap();
     this.mats = {
-      helmet: new THREE.MeshStandardMaterial({ color: team.primary, roughness: 0.22, metalness: 0.4 }),
-      stripe: new THREE.MeshStandardMaterial({ color: team.secondary, roughness: 0.4 }),
-      mask: new THREE.MeshStandardMaterial({ color: home ? team.secondary : 0x9a9a9a, roughness: 0.45, metalness: 0.55 }),
-      pants: new THREE.MeshStandardMaterial({ color: pant, roughness: 0.75 }),
-      pantStripe: new THREE.MeshStandardMaterial({ color: pantStripe, roughness: 0.7 }),
-      sleeve: new THREE.MeshStandardMaterial({ color: home ? team.primary : 0xf4f4f4, roughness: 0.85 }),
-      sock: new THREE.MeshStandardMaterial({ color: home ? team.primary : team.secondary, roughness: 0.9 }),
-      cleat: new THREE.MeshStandardMaterial({ color: home ? 0x111111 : 0xf2f2f2, roughness: 0.55 }),
-      glove: new THREE.MeshStandardMaterial({ color: home ? team.secondary : team.primary, roughness: 0.7 }),
-      visor: new THREE.MeshStandardMaterial({ color: 0x111418, roughness: 0.1, metalness: 0.6, transparent: true, opacity: 0.85 }),
-      decal: new THREE.MeshStandardMaterial({ map: decalTexture(team), transparent: true, roughness: 0.3, metalness: 0.2 }),
-      compression: new THREE.MeshStandardMaterial({ color: home ? 0x151515 : team.primary, roughness: 0.8 }),
+      helmet: new THREE.MeshPhysicalMaterial({ color: team.primary, roughness: 0.32, metalness: 0.15, clearcoat: 1, clearcoatRoughness: 0.06 }),
+      stripe: new THREE.MeshPhysicalMaterial({ color: team.secondary, roughness: 0.35, clearcoat: 1, clearcoatRoughness: 0.08 }),
+      mask: new THREE.MeshStandardMaterial({ color: home ? team.secondary : 0x9a9a9a, roughness: 0.32, metalness: 0.7 }),
+      pants: new THREE.MeshStandardMaterial({ color: new THREE.Color(pant).multiplyScalar(0.92), roughness: 0.62, metalness: 0, normalMap: knit, normalScale: new THREE.Vector2(0.15, 0.15) }),
+      pantStripe: new THREE.MeshStandardMaterial({ color: pantStripe, roughness: 0.5 }),
+      sleeve: new THREE.MeshStandardMaterial({ color: home ? team.primary : 0xf4f4f4, roughness: 0.72, normalMap: knit, normalScale: new THREE.Vector2(0.25, 0.25) }),
+      sock: new THREE.MeshStandardMaterial({ color: home ? team.primary : team.secondary, roughness: 0.85 }),
+      cleat: new THREE.MeshStandardMaterial({ color: home ? 0x111111 : 0xf2f2f2, roughness: 0.32, metalness: 0.05 }),
+      glove: new THREE.MeshStandardMaterial({ color: home ? team.secondary : team.primary, roughness: 0.55 }),
+      visor: new THREE.MeshStandardMaterial({ color: 0x111418, roughness: 0.05, metalness: 0.8, transparent: true, opacity: 0.88 }),
+      decal: new THREE.MeshStandardMaterial({ map: decalTexture(team), transparent: true, roughness: 0.25, metalness: 0.1 }),
+      compression: new THREE.MeshStandardMaterial({ color: home ? 0x151515 : team.primary, roughness: 0.6 }),
       towel: new THREE.MeshStandardMaterial({ color: 0xf6f6f6, roughness: 0.95, side: THREE.DoubleSide }),
+      earhole: new THREE.MeshStandardMaterial({ color: 0x0c0d10, roughness: 0.6 }),
     };
+    this.knit = knit;
     this.jerseyMats = new Map();
     this.shoulderMats = new Map();
   }
   jersey(num) {
-    if (!this.jerseyMats.has(num)) this.jerseyMats.set(num, new THREE.MeshStandardMaterial({ map: jerseyTexture(this.team, num, this.home), roughness: 0.85 }));
+    if (!this.jerseyMats.has(num)) this.jerseyMats.set(num, new THREE.MeshStandardMaterial({ map: jerseyTexture(this.team, num, this.home), roughness: 0.7, normalMap: this.knit, normalScale: new THREE.Vector2(0.28, 0.28) }));
     return this.jerseyMats.get(num);
   }
   shoulder(num) {
-    if (!this.shoulderMats.has(num)) this.shoulderMats.set(num, new THREE.MeshStandardMaterial({ map: smallNumberTexture(this.team, num, this.home), roughness: 0.85 }));
+    if (!this.shoulderMats.has(num)) this.shoulderMats.set(num, new THREE.MeshStandardMaterial({ map: smallNumberTexture(this.team, num, this.home), roughness: 0.75 }));
     return this.shoulderMats.get(num);
   }
 }
@@ -133,7 +165,7 @@ export class PlayerModel {
     this.hips = new THREE.Group();
     this.hips.position.y = 1.0;
     this.body.add(this.hips);
-    const pelvis = mesh(geo('pelvis' + w, () => new THREE.BoxGeometry(0.42 * w, 0.24, 0.28 * w)), M.pants);
+    const pelvis = mesh(geo('pelvis' + w, () => { const g = new THREE.SphereGeometry(0.215 * w, 18, 12); g.scale(1, 0.62, 0.72); return g; }), M.pants);
     this.hips.add(pelvis);
     if (opts.towel) {
       const towel = mesh(geo('towel', () => new THREE.PlaneGeometry(0.11, 0.24)), M.towel, false);
@@ -144,17 +176,22 @@ export class PlayerModel {
     this.torso = new THREE.Group();
     this.torso.position.y = 0.08;
     this.hips.add(this.torso);
-    const torso = mesh(geo('torso' + w, () => new THREE.CylinderGeometry(0.27 * w, 0.21 * w, 0.62, 16, 1, false, Math.PI / 2)), look.jersey(num));
-    torso.position.y = 0.33;
+    const torso = mesh(geo('torso' + w, () => {
+      const prof = [[0.19, 0], [0.205, 0.1], [0.225, 0.22], [0.255, 0.36], [0.278, 0.48], [0.282, 0.56], [0.24, 0.62], [0.13, 0.655]].map(([r, y]) => new THREE.Vector2(r * w, y));
+      const g = new THREE.LatheGeometry(prof, 22, Math.PI / 2);
+      g.scale(1, 1, 0.78); // deeper side-to-side than front-to-back
+      return g;
+    }), look.jersey(num));
+    torso.position.y = 0.02;
     this.torso.add(torso);
     // Shoulder pads: two domes over a collar block, with TV numbers on top
     const collar = mesh(geo('collar' + w, () => new THREE.BoxGeometry(0.34 * w, 0.12, 0.36 * w)), M.sleeve);
     collar.position.y = 0.6;
     this.torso.add(collar);
-    const domeG = geo('dome' + w, () => new THREE.SphereGeometry(0.2 * w, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2));
+    const domeG = geo('dome' + w, () => new THREE.SphereGeometry(0.215 * w, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2));
     for (const s of [-1, 1]) {
       const dome = mesh(domeG, M.sleeve);
-      dome.scale.set(1.05, 0.62, 1.08);
+      dome.scale.set(1.08, 0.66, 1.0);
       dome.position.set(0.21 * s * w, 0.57, 0);
       this.torso.add(dome);
       const tv = mesh(geo('tvnum', () => new THREE.PlaneGeometry(0.15, 0.11)), look.shoulder(num), false);
@@ -170,9 +207,15 @@ export class PlayerModel {
     this.head = new THREE.Group();
     this.head.position.y = 0.9;
     this.torso.add(this.head);
-    const helmet = mesh(geo('helmet', () => new THREE.SphereGeometry(0.16, 20, 14)), M.helmet);
-    helmet.scale.set(1, 1.0, 1.14);
+    const helmet = mesh(geo('helmet', () => new THREE.SphereGeometry(0.165, 32, 20)), M.helmet);
+    helmet.scale.set(1, 1.02, 1.12);
     this.head.add(helmet);
+    for (const s of [-1, 1]) {
+      const ear = mesh(geo('earhole', () => new THREE.CircleGeometry(0.022, 12)), M.earhole, false);
+      ear.position.set(0.162 * s, -0.025, 0.035);
+      ear.rotation.y = s * Math.PI / 2;
+      this.head.add(ear);
+    }
     const stripe = mesh(geo('hstripe', () => new THREE.BoxGeometry(0.045, 0.016, 0.35)), M.stripe, false);
     stripe.position.set(0, 0.16, -0.005);
     this.head.add(stripe);
@@ -183,7 +226,7 @@ export class PlayerModel {
       this.head.add(decal);
     }
     // Facemask: two arcs, a center bar and side connectors
-    const maskG = geo('mask', () => new THREE.TorusGeometry(0.125, 0.011, 6, 14, Math.PI));
+    const maskG = geo('mask', () => new THREE.TorusGeometry(0.128, 0.0135, 8, 20, Math.PI));
     for (const yy of [-0.035, -0.085]) {
       const mk = mesh(maskG, M.mask, false);
       mk.rotation.x = Math.PI / 2; mk.rotation.z = Math.PI;
@@ -191,9 +234,14 @@ export class PlayerModel {
       mk.scale.set(1, 1.22, 1);
       this.head.add(mk);
     }
-    const bar = mesh(geo('maskbar', () => new THREE.BoxGeometry(0.018, 0.11, 0.018)), M.mask, false);
+    const bar = mesh(geo('maskbar', () => new THREE.CylinderGeometry(0.011, 0.011, 0.11, 8)), M.mask, false);
     bar.position.set(0, -0.06, 0.205);
     this.head.add(bar);
+    for (const s of [-1, 1]) {
+      const side = mesh(geo('maskside', () => new THREE.CylinderGeometry(0.01, 0.01, 0.1, 6)), M.mask, false);
+      side.position.set(0.105 * s, -0.06, 0.15);
+      this.head.add(side);
+    }
     if (opts.visor) {
       const visor = mesh(geo('visor', () => new THREE.BoxGeometry(0.2, 0.055, 0.012)), M.visor, false);
       visor.position.set(0, 0.0, 0.178);
@@ -205,16 +253,16 @@ export class PlayerModel {
       const shoulder = new THREE.Group();
       shoulder.position.set(0.36 * s * w, 0.56, 0);
       this.torso.add(shoulder);
-      const up = mesh(geo('uarm' + w, () => new THREE.CylinderGeometry(0.078 * w, 0.066 * w, 0.32, 8)), M.sleeve);
+      const up = mesh(geo('uarm' + w, () => new THREE.CapsuleGeometry(0.074 * w, 0.2, 4, 12)), M.sleeve);
       up.position.y = -0.16;
       shoulder.add(up);
       const elbow = new THREE.Group();
       elbow.position.y = -0.32;
       shoulder.add(elbow);
-      const fore = mesh(geo('farm' + w, () => new THREE.CylinderGeometry(0.06 * w, 0.05, 0.3, 8)), opts.sleeves ? M.compression : skin);
+      const fore = mesh(geo('farm' + w, () => new THREE.CapsuleGeometry(0.055 * w, 0.2, 4, 12)), opts.sleeves ? M.compression : skin);
       fore.position.y = -0.15;
       elbow.add(fore);
-      const hand = mesh(geo('hand', () => new THREE.SphereGeometry(0.058, 8, 6)), M.glove, false);
+      const hand = mesh(geo('hand', () => { const g = new THREE.SphereGeometry(0.056, 12, 8); g.scale(0.85, 1.25, 0.7); return g; }), M.glove, false);
       hand.position.y = -0.32;
       elbow.add(hand);
       this.arms.push({ shoulder, elbow, hand });
@@ -225,19 +273,38 @@ export class PlayerModel {
       const hip = new THREE.Group();
       hip.position.set(0.12 * s * w, -0.08, 0);
       this.hips.add(hip);
-      const thigh = mesh(geo('thigh' + w, () => new THREE.CylinderGeometry(0.105 * w, 0.085 * w, 0.46, 8)), M.pants);
-      thigh.position.y = -0.23;
+      // Thigh (hip to knee): full through the thigh pads, slimming above the knee; the
+      // calf swells below the knee and narrows to the ankle. Pants run just past the knee.
+      const thigh = mesh(geo('thigh' + w, () => {
+        const prof = [[0.001, 0], [0.058, 0.004], [0.062, 0.05], [0.072, 0.15], [0.084, 0.27], [0.09, 0.37], [0.088, 0.44], [0.07, 0.48], [0.001, 0.485]].map(([r, y]) => new THREE.Vector2(r * w, y));
+        const g = new THREE.LatheGeometry(prof, 16);
+        g.translate(0, -0.47, 0);
+        return g;
+      }), M.pants);
       hip.add(thigh);
-      const ps = mesh(geo('pstripe' + w, () => new THREE.BoxGeometry(0.022, 0.44, 0.04)), M.pantStripe, false);
-      ps.position.set(0.098 * s * w, -0.23, 0);
+      // Side stripe hugging the outside of the thigh
+      const ps = mesh(geo('pstripe' + w + s, () => {
+        const prof = [[0.062, 0.05], [0.072, 0.15], [0.084, 0.27], [0.09, 0.37], [0.088, 0.44]].map(([r, y]) => new THREE.Vector2(r * w * 1.03 + 0.002, y));
+        const g = new THREE.LatheGeometry(prof, 2, (s > 0 ? Math.PI / 2 : Math.PI * 1.5) - 0.13, 0.26);
+        g.translate(0, -0.47, 0);
+        return g;
+      }), M.pantStripe, false);
       hip.add(ps);
       const knee = new THREE.Group();
       knee.position.y = -0.46;
       hip.add(knee);
-      const shin = mesh(geo('shin', () => new THREE.CylinderGeometry(0.075, 0.06, 0.42, 8)), M.sock);
-      shin.position.y = -0.21;
+      const cw = 0.85 + 0.15 * w;
+      const shin = mesh(geo('shin' + w, () => {
+        const prof = [[0.001, 0], [0.036, 0.01], [0.04, 0.06], [0.048, 0.16], [0.059, 0.27], [0.061, 0.32], [0.055, 0.38], [0.047, 0.42], [0.001, 0.43]].map(([r, y]) => new THREE.Vector2(r * cw, y));
+        const g = new THREE.LatheGeometry(prof, 14);
+        g.translate(0, -0.43, 0);
+        return g;
+      }), M.sock);
+      const kneeCap = mesh(geo('kneecap' + w, () => { const g = new THREE.SphereGeometry(0.064 * w, 12, 8); g.scale(1, 0.92, 1); return g; }), M.pants, false);
+      kneeCap.position.z = 0.012;
+      knee.add(kneeCap);
       knee.add(shin);
-      const foot = mesh(geo('foot', () => new THREE.BoxGeometry(0.1, 0.07, 0.26)), M.cleat);
+      const foot = mesh(geo('foot', () => { const g = new THREE.CapsuleGeometry(0.048, 0.17, 4, 10); g.rotateX(Math.PI / 2); g.scale(1.05, 0.75, 1); return g; }), M.cleat);
       foot.position.set(0, -0.44, 0.06);
       knee.add(foot);
       this.legs.push({ hip, knee });
