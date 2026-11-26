@@ -343,7 +343,8 @@ export class PlayerModel {
       }
       case 'throw': {
         // Right arm cocks up and back, then whips forward over the top.
-        const k = Math.min(1, t / 0.34);
+        // The ball leaves the hand ~60% of the way through (mid-whip) after the sim's windup.
+        const k = Math.min(1, t / (ctx.windup ? ctx.windup / 0.6 : 0.34));
         const arm = k < 0.45 ? [2.4 + k * 0.5, -0.35, -1.6] : [2.62 - (k - 0.45) * 6.8, -0.25, -1.6 + (k - 0.45) * 2.5];
         this.pose({ hipY: 0.98, lean: 0.08 + k * 0.28, turn: -0.45 + k * 0.7, legs: [[-0.25, -0.15, -0.1], [0.3, -0.25, 0.12]], arms: [arm, [-1.0, 0.3, -0.6]], head: -0.05 });
         break;

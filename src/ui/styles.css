@@ -193,3 +193,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .ic-at { font-size: 40px; font-weight: 900; color: var(--dim); }
 .ic-skip { margin-top: 12px; font-size: 12px; color: #cfd8e6; text-shadow: 0 2px 6px #000; }
 @keyframes introIn { from { opacity: 0; transform: translate(-50%, 30px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* Season depth chart controls */
+td.dc { white-space: nowrap; width: 1%; }
+.dcb { background: rgba(255,255,255,0.08); color: var(--text, #fff); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; width: 22px; height: 20px; padding: 0; margin-right: 2px; font-size: 10px; cursor: pointer; line-height: 1; }
+.dcb:hover:not([disabled]) { background: var(--accent, #2fd5ff); color: #000; }
+.dcb[disabled] { opacity: 0.25; cursor: default; }
+
+.fps-meter { position: absolute; top: 6px; right: 8px; z-index: 50; font: 600 11px/1 system-ui, sans-serif; color: #9fe8ff; background: rgba(0,0,0,0.45); padding: 3px 6px; border-radius: 4px; pointer-events: none; }

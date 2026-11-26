@@ -156,7 +156,7 @@ export const STYLE_FORMATIONS = {
 };
 
 // Run/pass lean per style on standard downs (probability of calling a run).
-export const STYLE_RUN_RATE = { westcoast: 0.42, spread: 0.4, power: 0.53, airraid: 0.33, vertical: 0.42, balanced: 0.46 };
+export const STYLE_RUN_RATE = { westcoast: 0.46, spread: 0.44, power: 0.57, airraid: 0.37, vertical: 0.46, balanced: 0.5 };
 
 export const OFF_STYLE_NAMES = { westcoast: 'West Coast', spread: 'Spread', power: 'Power Run', airraid: 'Air Raid', vertical: 'Vertical', balanced: 'Balanced' };
 

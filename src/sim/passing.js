@@ -1,4 +1,5 @@
 // Passing: target evaluation, throws, ball flight, catches, interceptions, loose balls.
+import { TUNE } from './tune.js';
 import { FIELD_WIDTH, GRAVITY, BALL_CARRY_HEIGHT, GOAL_LINE_E, GOAL_LINE_W } from '../core/constants.js';
 import { clamp, dist } from '../core/util.js';
 
@@ -155,6 +156,30 @@ export function evalTarget(sim, qb, r, forceType) {
   return { margin, type, C, T, depth };
 }
 
+// The throwing motion: the decision is made now and the ball leaves the hand a beat
+// later (arm cocks, then whips forward). A rusher who gets home in between still
+// makes the sack, and can knock the ball loose.
+export function startThrow(sim, qb, r, type, place = null) {
+  if (!qb.hasBall || sim.thrown || sim.pendingThrow) return false;
+  const rel = qb.user ? 0.17 : clamp(0.3 - ((qb.r.thp ?? 80) - 80) * 0.003, 0.22, 0.36);
+  sim.pendingThrow = { r, type, place, at: sim.t + rel, t0: sim.t };
+  qb.windup = rel;
+  qb.anim = 'throw'; qb.animT = 0;
+  return true;
+}
+
+export function updatePendingThrow(sim) {
+  const p = sim.pendingThrow;
+  if (!p) return;
+  const qb = sim.qb;
+  if (!qb || !qb.hasBall || sim.thrown || sim.dead || !qb.isActive()) { sim.pendingThrow = null; return; }
+  qb.anim = 'throw';
+  if (sim.t >= p.at) {
+    sim.pendingThrow = null;
+    throwBall(sim, qb, p.r && p.r.isActive() ? p.r : p.r, p.type, p.place);
+  }
+}
+
 export function throwBall(sim, qb, r, type, place) {
   if (!qb.hasBall || sim.thrown) return;
   const { C, T: T0 } = solveFlight(sim, qb, r, type);
@@ -170,7 +195,7 @@ export function throwBall(sim, qb, r, type, place) {
   // Accuracy
   const r_ = qb.r;
   const acc = d < 15 ? r_.sac : d < 30 ? r_.sac * (30 - d) / 15 + r_.mac * (d - 15) / 15 : d < 45 ? r_.mac * (45 - d) / 15 + r_.dac * (d - 30) / 15 : r_.dac;
-  let sigma = (0.25 + d * 0.024 + Math.max(0, d - 20) * 0.035) * (1.32 - acc / 100) * 1.5;
+  let sigma = (0.25 + d * 0.024 + Math.max(0, d - 20) * TUNE.deepSigma) * (1.32 - acc / 100) * 1.5;
   const pressured = sim.def.some((x) => x.isActive() && !x.engaged && dist(x.x, x.y, qb.x, qb.y) < 2.6);
   if (pressured) sigma *= 1.55 - (r_.tup ?? 60) * 0.004;
   if (qb.speed > 2.5) sigma *= 1.5 - (r_.tor ?? 60) * 0.0045;
@@ -215,6 +240,8 @@ export function throwBall(sim, qb, r, type, place) {
 
 export function throwAway(sim, qb, nearRec = null) {
   if (!qb.hasBall || sim.thrown) return;
+  sim.pendingThrow = null;
+  qb.windup = null;
   const fr = sim.frame(qb.x, qb.y);
   let tx, ty;
   if (nearRec) {

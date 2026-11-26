@@ -21,11 +21,13 @@ export class Renderer {
   constructor(container, settings = {}) {
     this.container = container;
     this.settings = settings;
-    const quality = settings.graphics || 'medium';
+    const quality = settings.graphics || 'auto';
     this.quality = quality;
     this.r = new THREE.WebGLRenderer({ antialias: quality !== 'low', powerPreference: 'high-performance' });
-    const dpr = window.devicePixelRatio || 1;
-    this.r.setPixelRatio(quality === 'low' ? 1 : quality === 'medium' ? Math.min(dpr, 1.25) : Math.min(dpr, 2));
+    // Resolution: fixed per quality level, or adaptive ('auto') to hold a smooth frame rate.
+    this.resScale = 1;
+    this.fps = 60; this.fpsAcc = 0; this.fpsN = 0; this.slowT = 0; this.fastT = 0;
+    this.setQuality(quality, true);
     this.r.outputColorSpace = THREE.SRGBColorSpace;
     this.r.toneMapping = THREE.ACESFilmicToneMapping;
     this.r.toneMappingExposure = 1.05;
@@ -64,6 +66,37 @@ export class Renderer {
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
+
+  setQuality(q, init = false) {
+    const dpr = window.devicePixelRatio || 1;
+    this.quality = q;
+    this.autoQ = q === 'auto';
+    this.baseRatio = q === 'low' ? 1 : q === 'high' ? Math.min(dpr, 2) : q === 'auto' ? Math.min(dpr, 1.5) : Math.min(dpr, 1.25);
+    this.resScale = 1;
+    this.r.setPixelRatio(this.baseRatio);
+    const shadows = q !== 'low';
+    if (this.r.shadowMap.enabled !== shadows) {
+      this.r.shadowMap.enabled = shadows;
+      if (!init && this.scene) this.scene.traverse((o) => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { m.needsUpdate = true; }); });
+    }
+    if (!init) this.resize();
+  }
+
+  // Frame-rate tracking; in 'auto' mode the render resolution steps down when frames
+  // run slow and back up when there is headroom.
+  trackFrame(dt) {
+    this.fpsAcc += dt; this.fpsN++;
+    if (this.fpsAcc < 0.5) return;
+    this.fps = this.fpsN / this.fpsAcc;
+    this.fpsAcc = 0; this.fpsN = 0;
+    if (!this.autoQ || document.hidden) return;
+    this.slowT = this.fps < 45 ? this.slowT + 0.5 : 0;
+    this.fastT = this.fps > 57 ? this.fastT + 0.5 : 0;
+    if (this.slowT >= 2 && this.resScale > 0.55) { this.resScale = Math.max(0.55, this.resScale - 0.15); this.slowT = 0; this.applyScale(); }
+    else if (this.fastT >= 10 && this.resScale < 1) { this.resScale = Math.min(1, this.resScale + 0.1); this.fastT = 0; this.applyScale(); }
+  }
+
+  applyScale() { this.r.setPixelRatio(Math.max(0.5, this.baseRatio * this.resScale)); this.resize(); }
 
   resize() {
     const w = this.container.clientWidth || window.innerWidth, h = this.container.clientHeight || window.innerHeight;
@@ -307,6 +340,7 @@ export class Renderer {
       this.sun.target.position.copy(this.camLook);
     }
     this.r.render(this.scene, this.camera);
+    this.trackFrame(dt);
   }
 
   syncEntities(sim, dt, alpha = 1) {
@@ -341,7 +375,7 @@ export class Renderer {
         m.fallSide = Math.max(-1, Math.min(1, (fx * e.vy - fy * e.vx) / vs));
         m.fallSet = true;
       } else if (anim !== 'fall' && anim !== 'down') m.fallSet = false;
-      m.animate(anim, sp, dt, { turnRate: m.turnRate, fallBack: m.fallBack, fallSide: m.fallSide });
+      m.animate(anim, sp, dt, { turnRate: m.turnRate, fallBack: m.fallBack, fallSide: m.fallSide, windup: e.windup });
     }
   }
 

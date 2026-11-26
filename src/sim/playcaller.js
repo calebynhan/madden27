@@ -94,7 +94,16 @@ export function shouldSpike(game, team) {
 
 export function wantsHurry(game, team) {
   const s = situation(game, team);
-  return ((s.q === 2 && s.clock < 120) || (s.q >= 4 && s.clock < 300 && s.diff < 0) || (s.q >= 4 && s.clock < 150 && s.diff <= 0));
+  if (s.q === 2) return s.clock < 120;
+  if (s.q < 4) return false;
+  if (s.diff < 0) return s.clock < 180 || (s.clock < 330 && s.diff < -8);
+  return s.diff === 0 && s.clock < 120;
+}
+
+// Leading late: run the play clock down before every snap.
+export function wantsToMilk(game, team) {
+  const s = situation(game, team);
+  return s.q >= 4 && s.diff > 0 && s.clock < 480;
 }
 
 export function chooseOffensivePlay(game, team) {

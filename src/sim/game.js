@@ -52,6 +52,9 @@ export class Game {
   on(fn) { this.listeners.push(fn); }
   emit(type, data = {}) { for (const fn of this.listeners) fn(type, data, this); }
   isUser(team) { return !!this.controllers[team]; }
+  // Coach mode: a human team whose plays are run by the CPU (the human still makes every call).
+  isCoach(team) { return !!(this.settings.coachMode && this.controllers[team]); }
+  autoSnap(team) { return !this.isUser(team) || this.isCoach(team); }
 
   attackDir(team, quarter = this.quarter) {
     // Home attacks +x in odd quarters (and odd OT periods).
@@ -122,7 +125,7 @@ export class Game {
     this.sim.safetyKick = this.safetyKick;
     this.phase = 'presnap';
     this.phaseT = 0;
-    this.presnapWait = this.isUser(kt) ? Infinity : 1.2;
+    this.presnapWait = this.autoSnap(kt) ? 1.2 : Infinity;
     this.emit('phase', { phase: 'presnap', kick: true });
   }
 
@@ -191,13 +194,13 @@ export class Game {
     this.phase = 'presnap';
     this.phaseT = 0;
     const hurry = AI.wantsHurry(this, off);
-    this.presnapWait = this.isUser(off) ? Infinity : (hurry ? 0.9 : this.isUser(def) ? 2.6 + this.rng.next() * 1.6 : 0.8 + this.rng.next() * 0.8);
+    this.presnapWait = !this.autoSnap(off) ? Infinity : (hurry ? 0.9 : this.isCoach(off) ? 1.8 + this.rng.next() * 0.8 : this.isUser(def) ? 2.6 + this.rng.next() * 1.6 : 0.8 + this.rng.next() * 0.8);
     // The offense is never charged for time the defense spent choosing its call.
-    if (this.callAt && this.callAt[def] > this.callAt[off]) this.playClock = Math.max(this.playClock, this.isUser(off) ? 15 : this.presnapWait + 1.5);
+    if (this.callAt && this.callAt[def] > this.callAt[off]) this.playClock = Math.max(this.playClock, this.autoSnap(off) ? this.presnapWait + 1.5 : 15);
     // CPU hard count / false start
     this.presnapFoul = null;
-    if (!this.isUser(off) && !this.conversion && this.rng.chance(0.016)) this.presnapFoul = { type: 'false_start', team: off };
-    else if (!this.isUser(def) && !this.conversion && this.rng.chance(0.011)) this.presnapFoul = { type: 'offside', team: def };
+    if (!this.isUser(off) && !this.conversion && this.rng.chance(0.022)) this.presnapFoul = { type: 'false_start', team: off };
+    else if (!this.isUser(def) && !this.conversion && this.rng.chance(0.015)) this.presnapFoul = { type: 'offside', team: def };
     this.emit('phase', { phase: 'presnap' });
   }
 
@@ -217,7 +220,7 @@ export class Game {
     this.phase = 'presnap';
     this.phaseT = 0;
     this.presnapFoul = null;
-    this.presnapWait = this.isUser(off) ? Infinity : 1.4;
+    this.presnapWait = this.autoSnap(off) ? 1.4 : Infinity;
     this.emit('phase', { phase: 'presnap', kick: true });
   }
 
@@ -229,9 +232,12 @@ export class Game {
     const off = this.sim.offIdx;
     // Accelerated clock runoff
     if (this.clockRunning && this.settings.accel && !this.conversion && this.sim.kind === 'scrimmage') {
-      // No-huddle: a team that needs to hurry (either side, human or CPU) only loses the time it actually used
-      const hurry = AI.wantsHurry(this, off);
-      const target = 40 - (hurry ? 32 : this.settings.accelTo);
+      // Clock between snaps: normal tempo uses the accelerated setting; a no-huddle offense
+      // (human or CPU) gets to the line in ~15 s, a spike in ~8 s; a CPU team protecting a
+      // late lead bleeds most of the play clock.
+      const normal = 40 - this.settings.accelTo;
+      const spike = this.sim.offPlay && this.sim.offPlay.id === 'spike';
+      const target = spike ? 8 : AI.wantsHurry(this, off) ? Math.min(15, normal) : (this.autoSnap(off) && AI.wantsToMilk(this, off)) ? Math.min(38, normal + 8) : normal;
       const extra = Math.max(0, target - this.betweenElapsed);
       this.runClock(extra, true);
       if (this.phase !== 'presnap') return; // quarter ended
@@ -466,10 +472,10 @@ export class Game {
     // Random line-play penalties (holding) tied to what happened on the play
     const sheds = r.events.filter((e) => e.type === 'shed').length;
     if (r.td === null || this.rng.chance(0.5)) {
-      const pHold = (s.playType === 'run' ? 0.017 : 0.014) + sheds * 0.003;
+      const pHold = (s.playType === 'run' ? 0.024 : 0.02) + sheds * 0.003;
       if (this.rng.chance(pHold)) flags.push({ type: 'holding', team: off });
-      if (s.playType !== 'run' && this.rng.chance(0.009)) flags.push({ type: 'def_holding', team: def });
-      if (this.rng.chance(0.004)) flags.push({ type: 'facemask', team: def });
+      if (s.playType !== 'run' && this.rng.chance(0.012)) flags.push({ type: 'def_holding', team: def });
+      if (this.rng.chance(0.005)) flags.push({ type: 'facemask', team: def });
     }
     if (!flags.length) return false;
     const f = flags[0];

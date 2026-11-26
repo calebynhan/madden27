@@ -33,10 +33,11 @@ export function setupDefenseTasks(sim) {
     } else if (a.t === 'zone') d.task = zoneTask(sim, a.zone, st);
     else if (a.t === 'spy') d.task = { kind: 'spy' };
     else d.task = zoneTask(sim, 'hook_M', st);
-    if (d.task.kind === 'zone' && d.task.zs.deep) d.reactRun += d.pos === 'CB' ? 0.05 : 0.25;
+    if (d.task.kind === 'zone') shadeZone(sim, d.task);
+    if (d.task.kind === 'zone' && d.task.zs.deep) d.reactRun += d.pos === 'CB' ? 0.05 : TUNE.deepRunReact;
     if (sim.playAction) d.reactRun += (99 - (d.r.prc ?? 60)) * 0.009;
     // Press jam at the line
-    if (d.task.kind === 'man' && sim.defPlay.press && d.task.target.pos !== 'RB') {
+    if (d.task.kind === 'man' && sim.pressOn() && d.task.target.pos !== 'RB') {
       const r = d.task.target;
       if (dist(d.x, d.y, r.x, r.y) < 2.2) {
         const contest = ((d.r.prs ?? 50) - (r.r.rls ?? 50)) * 0.012 + (sim.rng.next() - 0.5) * 0.9;
@@ -45,6 +46,19 @@ export function setupDefenseTasks(sim) {
       }
     }
   }
+}
+
+// Zone landmarks move with the pre-snap coverage shading.
+function shadeZone(sim, task) {
+  const shade = sim.covAdj && sim.covAdj.shade;
+  if (!shade || !task.lm) return;
+  const lf = sim.frame(task.lm.x, task.lm.y);
+  let f = lf.f, l = lf.l;
+  if (shade === 'over') f += task.zs.deep ? 2.5 : 1.5;
+  else if (shade === 'under') f -= task.zs.deep ? 1.5 : 1.2;
+  else if (shade === 'inside') l -= Math.sign(l) * Math.min(2, Math.abs(l));
+  else if (shade === 'outside') l += Math.sign(l || 1) * 2;
+  task.lm = sim.field(Math.max(1, f), l);
 }
 
 function zoneTask(sim, zname, st) {
@@ -87,6 +101,33 @@ export function updateDefense(sim, d, dt) {
       return;
     }
   }
+  // Deep safeties: a read step at the snap, then fit the run downhill (alley players in
+  // two-deep shells; the middle-of-field safety stays a little deeper) or bail on a pass
+  // read. Play-action pulls them up for a moment before they recover.
+  if (!sim.thrown && d.pos === 'S' && t.kind === 'zone' && t.zs.deep) {
+    if (d.readT === undefined) d.readT = (0.22 + (99 - (d.r.prc ?? 60)) * 0.008) * (d.react || 1);
+    const designedRun = !!sim.run && sim.run.scheme !== 'draw' && sim.run.scheme !== 'qb_draw';
+    const pa = sim.playAction;
+    const biteT = d.readT + 0.2 + (99 - (d.r.prc ?? 60)) * 0.012;
+    const df = sim.frame(d.x, d.y);
+    if (sim.t < d.readT) {
+      const p = sim.field(df.f + 0.6, df.l);
+      d.seek(p.x, p.y, 0.3, 0.4);
+      d.anim = 'backpedal';
+      return;
+    }
+    if (designedRun || (pa && sim.t < biteT)) {
+      const back = (c && c !== sim.qb && c.team !== d.team) ? c : (sim.run ? sim.off.find((o) => o.tag === sim.run.ballTag) : sim.qb) || sim.qb;
+      const bf = sim.frame(back.x, back.y);
+      if (back === c && bf.f > -0.5) return pursue(sim, d, c, dt);
+      const post = !t.zs.side;
+      const fitF = (post ? TUNE.postFitDepth : TUNE.alleyFitDepth) + (pa && !designedRun ? 1.5 : 0);
+      const p = sim.field(Math.max(fitF, df.f - 1.5), df.l + clamp(bf.l - df.l, -5, 5) * 0.6);
+      d.seek(p.x, p.y, 0.9, 0.6);
+      d.anim = 'run';
+      return;
+    }
+  }
   // Ball carrier is a runner (run play, scramble, after catch)
   const runnerPhase = c && c.team !== d.team && (sim.phase === 'run' || c !== sim.qb || c.qbRunner);
   if (runnerPhase) {
@@ -101,7 +142,7 @@ export function updateDefense(sim, d, dt) {
       return execTask(sim, d, dt);
     }
     // Deep defenders hold until the runner crosses the line.
-    if (!afterCatch && t.kind === 'zone' && t.zs.deep && d.pos !== 'CB' && sim.frame(c.x, c.y).f < 1.0 && since < react + 0.4) return execTask(sim, d, dt);
+    if (!afterCatch && t.kind === 'zone' && t.zs.deep && d.pos !== 'CB' && sim.frame(c.x, c.y).f < 1.0 && since < react + TUNE.deepRunHold) return execTask(sim, d, dt);
     return pursue(sim, d, c, dt);
   }
   return execTask(sim, d, dt);
@@ -195,8 +236,14 @@ function manCover(sim, d, dt) {
   let tf = rf.f + 0.15, tl = rf.l + inside * 0.55;
   // Covering a back who is still in the backfield: sit at linebacker depth and mirror.
   if ((r.pos === 'RB' || r.pos === 'FB') && rf.f < 1) { tf = Math.max(3.2, rf.f + 3); tl = rf.l; }
-  if (sim.t < 1.2 && !sim.defPlay.press && df.f > rf.f + 1.5) tf = Math.max(rf.f + 2.2, df.f - 0.4);
+  if (sim.t < 1.2 && !sim.pressOn() && df.f > rf.f + 1.5) tf = Math.max(rf.f + 2.2, df.f - 0.4);
   if (deep) tf = rf.f + 0.4;
+  // Coverage shading called pre-snap: give up one thing to take away another.
+  const shade = sim.covAdj && sim.covAdj.shade;
+  if (shade === 'inside') tl += inside * 0.8;
+  else if (shade === 'outside') tl -= inside * 1.3;
+  else if (shade === 'under') tf -= 1.2;
+  else if (shade === 'over') tf += 1.5;
   // Predict along lagged velocity
   const lead = delay * 0.9;
   const p = sim.field(tf, tl);

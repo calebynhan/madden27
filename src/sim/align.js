@@ -172,10 +172,13 @@ export function alignDefense(defEnts, offEnts, ballX, ballY, dir, press) {
   const st = nums.strong;
   const bu = ballU(ballY, dir);
   const taken = new Set();
-  // First resolve man targets so DBs can align on them.
+  // First resolve man targets so DBs can align on them (user-assigned matchups first).
+  for (const d of defEnts) d.manTarget = null;
   for (const d of defEnts) {
-    d.manTarget = null;
-    if (d.assign.t !== 'man') continue;
+    if (d.assign.t === 'man' && d.hotMan && offEnts.includes(d.hotMan) && !taken.has(d.hotMan)) { taken.add(d.hotMan); d.manTarget = d.hotMan; }
+  }
+  for (const d of defEnts) {
+    if (d.assign.t !== 'man' || d.manTarget) continue;
     let tgt = resolveManTarget(d.assign.target, nums);
     if (tgt && taken.has(tgt)) tgt = null;
     if (!tgt) {

@@ -2,7 +2,7 @@
 import { clamp, dist } from '../core/util.js';
 import { FIELD_WIDTH } from '../core/constants.js';
 import { startMove, runnerAI } from './runner.js';
-import { throwBall, throwAway } from './passing.js';
+import { startThrow, throwAway } from './passing.js';
 import { updateOffense } from './ai_offense.js';
 import { updateDefense } from './ai_defense.js';
 import { fumble } from './contact.js';
@@ -24,13 +24,14 @@ export function updateUser(sim, u, ctl, dt) {
   const carrierTeam = sim.carrier ? sim.carrier.team : sim.possession;
   // ---------------------------------------------------------------- QB in the pocket
   if (sim.kind === 'scrimmage' && u === sim.qb && u.hasBall && !u.qbRunner && sim.phase !== 'run') {
+    if (sim.pendingThrow) { u.setDesired(u.vx * 0.5, u.vy * 0.5); u.anim = 'throw'; return; } // in the throwing motion
     if (sim.playType === 'pass' || sim.playType === 'scramble') {
       for (let i = 1; i <= 5; i++) {
         const hold = ctl.released.get('pass' + i);
         if (hold !== undefined) {
           const r = sim.icons ? sim.icons[i - 1] : null;
           if (r && r.isActive()) {
-            throwBall(sim, u, r, passTypeFromHold(hold), moving ? { x: ctl.mx, y: ctl.my } : null);
+            startThrow(sim, u, r, passTypeFromHold(hold), moving ? { x: ctl.mx, y: ctl.my } : null);
             return;
           }
         }

@@ -3,7 +3,8 @@ import { FIELD_WIDTH } from '../core/constants.js';
 import { clamp, dist } from '../core/util.js';
 import { ROUTES } from '../data/routes.js';
 import { runnerAI } from './runner.js';
-import { evalTarget, throwBall, throwAway } from './passing.js';
+import { TUNE } from './tune.js';
+import { evalTarget, throwBall, throwAway, startThrow } from './passing.js';
 import { buildRoute } from './play.js';
 
 const DIFF_QB = [0.78, 0.92, 1.0, 1.08]; // CPU QB processing by difficulty (rookie..legend)
@@ -152,10 +153,12 @@ function qbThink(sim, e, dt) {
   }
   if (sim.run) return qbRunPlay(sim, e, dt);
   if (sim.thrown) { e.stop(); if (e.animT > 0.5) e.anim = 'idle'; return; }
+  if (sim.pendingThrow) { e.setDesired(e.vx * 0.5, e.vy * 0.5); e.anim = 'throw'; return; } // stepping into the throw
   if (!e.hasBall) { e.stop(); return; } // waiting on the shotgun snap
   // Dropback
   const gun = sim.form.qb !== 'center';
-  const dropDepth = { q: gun ? 0.8 : 3.2, m: gun ? 2.4 : 5.2, d: gun ? 3.8 : 7.0, pa: gun ? 3.0 : 6.5, boot: gun ? 2.0 : 5.5, screen: gun ? 4 : 7 }[sim.dropType] ?? 4;
+  // Drop depths (yards behind the snap point): 1/3/5-step from the gun, 3/5/7-step under center
+  const dropDepth = { q: gun ? 1.2 : 3.2, m: gun ? 3.0 : 5.4, d: gun ? 4.4 : 7.2, pa: gun ? 3.0 : 6.5, boot: gun ? 2.0 : 5.5, screen: gun ? 4 : 7 }[sim.dropType] ?? 4;
   if (!sim.qbDrop) {
     sim.qbDrop = { f: gun ? -5 - dropDepth : -dropDepth - 1.0, set: false, setT: 0 };
   }
@@ -172,9 +175,10 @@ function qbThink(sim, e, dt) {
     if (d < 1.4 || sim.t > 2.0) { qd.set = true; qd.setT = sim.t; }
   } else if (!qd.set) {
     const p = sim.field(qd.f, sim.frame(e.x, e.y).l * 0.9);
-    const d = e.seek(p.x, p.y, 0.62, 0.4);
+    // Dropback footwork is slower than running; the QB plants and resets at the top.
+    const d = e.seek(p.x, p.y, TUNE.dropSpeed, 0.4);
     e.anim = 'backpedal';
-    if (d < 0.35 || sim.t > 1.6) { qd.set = true; qd.setT = sim.t; }
+    if (d < 0.35 || sim.t > 1.9) { qd.set = true; qd.setT = sim.t + TUNE.setHitch; }
   }
   if (sim.boot && qd.set) {
     // Keep rolling toward the sideline while reading.
@@ -215,12 +219,12 @@ function cpuPassDecision(sim, qb, dt) {
   const diff = sim.isUser(sim.defIdx) ? DIFF_QB[sim.difficulty] : 1.0;
   const awr = qb.r.awr * diff;
   const quick = sim.dropType === 'q';
-  const readStart = quick ? 0.35 : sim.dropType === 'screen' ? 1.0 : (qd.set ? qd.setT : 99);
+  const readStart = quick ? TUNE.quickRead : sim.dropType === 'screen' ? 1.0 : (qd.set ? qd.setT : 99);
   if (sim.t < readStart) return;
   if (sim.screenTag) {
     const r = sim.off.find((o) => o.tag === sim.screenTag);
     if (r && sim.t > (r.route?.delay || 0.35) + 0.45) {
-      throwBall(sim, qb, r, 'touch', null);
+      startThrow(sim, qb, r, 'touch', null);
       return;
     }
     if (sim.t > 2.4) throwAway(sim, qb);
@@ -229,7 +233,8 @@ function cpuPassDecision(sim, qb, dt) {
   const reads = (play.reads || []).map((tag) => sim.off.find((o) => o.tag === tag)).filter((r) => r && r.task.kind === 'route');
   if (!reads.length) { const any = sim.off.filter((o) => o.task.kind === 'route'); reads.push(...any); }
   if (!reads.length) { if (sim.t > 2) throwAway(sim, qb); return; }
-  const interval = clamp(0.62 - awr * 0.0028, 0.3, 0.55);
+  // Time to work from one read to the next (NFL starters ~0.45-0.6 s)
+  const interval = clamp(0.88 - awr * 0.0048, 0.4, 0.68);
   const elapsed = sim.t - readStart;
   const readIdx = Math.min(reads.length - 1, Math.floor(elapsed / interval));
   qb.readIdx = readIdx;
@@ -263,10 +268,20 @@ function cpuPassDecision(sim, qb, dt) {
     val -= i * 0.015;
     return { r, ev, val, pC };
   };
+  // Throw on rhythm: a receiver is a live option once he reaches his break (aware QBs
+  // anticipate it by a fraction of a second); quick-game and checkdown routes are live early.
+  const antic = 0.08 + Math.max(0, awr - 70) * 0.011;
+  const atBreak = (r) => {
+    const rt = r.route;
+    if (!rt || rt.idx > 0 || rt.depthClass === 'short' || rt.depthClass === 'screen' || quick) return true;
+    const p0 = rt.pts[0];
+    return dist(r.x, r.y, p0.x, p0.y) / Math.max(4, r.speed) < antic;
+  };
   let best = null;
   for (let i = 0; i <= readIdx; i++) {
     const r = reads[i];
     if (r.route && r.route.delay && sim.t < r.route.delay + 0.2) continue;
+    if (!atBreak(r)) continue;
     const o = valueOf(r, i);
     if (o && (!best || o.val > best.val)) best = o;
   }
@@ -274,13 +289,21 @@ function cpuPassDecision(sim, qb, dt) {
   const thr = Math.max(hailMary ? -1 : 0.14, 0.54 - smart - elapsed * 0.2 - (underFire ? 0.25 : 0));
   if (best && best.val > thr && best.pC > (underFire ? 0.3 : 0.42)) {
     sim.throwMargin = best.ev.margin;
-    throwBall(sim, qb, best.r, best.ev.type, null);
+    startThrow(sim, qb, best.r, best.ev.type, null);
     return;
   }
   // Internal clock: experienced QBs get the ball out once the play has run its course.
   const internalClock = elapsed > 1.3 + (awr - 70) * 0.006;
-  // Hot: an unblocked rusher bearing down forces the ball out right now.
-  const hot = sim.def.some((d) => d.isActive() && !d.engaged && dist(d.x, d.y, qb.x, qb.y) < 3.2 && ((qb.x - d.x) * d.vx + (qb.y - d.y) * d.vy) > 0);
+  // Hot: an unblocked rusher bearing down forces the ball out now. Aware QBs see the free
+  // man earlier (and with the release time, earlier is what gets the throw off).
+  const hotR = 3.4 + Math.max(0, awr - 60) * 0.045;
+  const hot = sim.def.some((d) => {
+    if (!d.isActive() || d.engaged) return false;
+    const dd = dist(d.x, d.y, qb.x, qb.y);
+    if (dd > hotR) return false;
+    if (((qb.x - d.x) * d.vx + (qb.y - d.y) * d.vy) / Math.max(0.1, dd) < 1.5) return false; // not closing
+    return !sim.off.some((o) => o !== qb && o.isActive() && (o.blocking || o.task?.kind === 'passblock') && dist(o.x, o.y, d.x, d.y) < 1.4);
+  });
   const allRead = (readIdx >= reads.length - 1 && elapsed > interval * reads.length) || internalClock;
   if (underFire || allRead || hot) {
     // Checkdown: best of everyone
@@ -289,7 +312,7 @@ function cpuPassDecision(sim, qb, dt) {
       const o = valueOf(reads[i], 0);
       if (o && (!cd || o.pC * 0.6 + o.val * 0.4 > cd.pC * 0.6 + cd.val * 0.4)) cd = o;
     }
-    if (cd && cd.pC > (hot || underFire ? 0.3 : internalClock ? 0.45 : 0.55)) { sim.throwMargin = cd.ev.margin; throwBall(sim, qb, cd.r, cd.ev.type, null); return; }
+    if (cd && cd.pC > (hot || underFire ? 0.26 : internalClock ? 0.38 : 0.5)) { sim.throwMargin = cd.ev.margin; startThrow(sim, qb, cd.r, cd.ev.type, null); return; }
     // Scramble if there is room, otherwise throw it away or take the sack.
     const mobile = qb.r.spd > 78;
     const room = !sim.def.some((d) => d.isActive() && dist(d.x, d.y, qb.x + sim.dir * 3, qb.y) < 3);
@@ -297,7 +320,8 @@ function cpuPassDecision(sim, qb, dt) {
     // Out of the pocket (bootleg/rollout) or past the internal clock with pressure
     // coming: smart QBs live to play another down.
     const outsidePocket = Math.abs(sim.frame(qb.x, qb.y).l) > 3.2;
-    const bailRate = (underFire ? 1.0 : hot ? 0.8 : 0) + (internalClock && (outsidePocket || hot) ? 1.2 : 0);
+    // ...and once the play has clearly broken down, get rid of it rather than hold on.
+    const bailRate = (underFire ? 0.7 : hot ? 0.55 : 0) + (internalClock && (outsidePocket || hot) ? 0.85 : 0) + (elapsed > 2.8 ? 0.6 : 0);
     if (bailRate > 0 && elapsed > 0.5 && sim.rng.chance(dt * bailRate * (0.7 + (awr - 60) * 0.02))) {
       const outside = Math.abs(sim.frame(qb.x, qb.y).l) > 3.2;
       // Throw it at the feet of the nearest receiver (no grounding) or out of bounds.

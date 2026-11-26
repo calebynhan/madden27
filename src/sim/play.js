@@ -8,7 +8,7 @@ import { ROUTES } from '../data/routes.js';
 import { updateOffense, setupOffenseTasks } from './ai_offense.js';
 import { updateDefense, setupDefenseTasks } from './ai_defense.js';
 import { updateEngagements, resolveTackles, separate } from './contact.js';
-import { updateBall } from './passing.js';
+import { updateBall, updatePendingThrow } from './passing.js';
 import { updateUser } from './user.js';
 import { setupKick, updateKickRoles } from './kicking.js';
 
@@ -87,8 +87,9 @@ export class PlaySim {
   get offTeam() { return this.teams[this.offIdx]; }
   get defTeam() { return this.teams[this.defIdx]; }
 
-  isUser(team) { return !!this.controllers[team]; }
-  ctl(team) { return this.controllers[team]; }
+  // Coach mode: the human calls the plays, the CPU plays them out.
+  isUser(team) { return !!this.controllers[team] && !(this.game && this.game.isCoach && this.game.isCoach(team)); }
+  ctl(team) { return this.isUser(team) ? this.controllers[team] : null; }
 
   addEnt(player, team, side, tag, role, f, l) {
     const e = new Entity(player, team, side, tag, role);
@@ -139,8 +140,28 @@ export class PlaySim {
     this.ball.x = this.losX; this.ball.y = this.ballY0; this.ball.z = 0.2;
   }
 
+  // Press coverage: the call's default unless the user adjusted it pre-snap.
+  pressOn() { return this.covAdj && typeof this.covAdj.press === 'boolean' ? this.covAdj.press : !!this.defPlay.press; }
+
+  // Defensive hot route for one defender (pre-snap). str uses the playbook shorthand.
+  setDefAssign(d, str, manEnt = null) {
+    if (this.phase !== 'presnap' || !d || d.side !== 'D') return false;
+    d.assign = parseAssign(str);
+    d.hotMan = d.assign.t === 'man' ? manEnt : null;
+    d.hotAssigned = true;
+    this.realignDefense(false);
+    return true;
+  }
+
+  setCoverageAdjust(key, value) {
+    if (this.phase !== 'presnap') return false;
+    this.covAdj = { ...(this.covAdj || {}), [key]: value };
+    this.realignDefense(false);
+    return true;
+  }
+
   realignDefense(snapTo) {
-    this.nums = alignDefense(this.def, this.off, this.losX, this.ballY0, this.dir, this.defPlay.press);
+    this.nums = alignDefense(this.def, this.off, this.losX, this.ballY0, this.dir, this.pressOn());
     for (const d of this.def) {
       if (d.presnapShift) { d.alignF += d.presnapShift.f || 0; d.alignL += d.presnapShift.l || 0; }
       const p = toField(this.losX, this.ballY0, this.dir, d.alignF, d.alignL);
@@ -151,7 +172,7 @@ export class PlaySim {
 
   pickDefaultUsers() {
     for (const team of [0, 1]) {
-      if (!this.controllers[team]) continue;
+      if (!this.isUser(team)) continue;
       if (this.kind !== 'scrimmage') { this.userEnt[team] = null; continue; }
       if (team === this.offIdx) this.setUser(team, this.qb);
       else {
@@ -308,6 +329,7 @@ export class PlaySim {
       const u = this.userEnt[team];
       if (u && this.ctl(team)) updateUser(this, u, this.ctl(team), dt);
     }
+    if (this.pendingThrow) updatePendingThrow(this);
     // Physics
     for (const e of this.ents) if (!e.engaged) e.integrate(dt, this.weatherSpeed);
     updateEngagements(this, dt);

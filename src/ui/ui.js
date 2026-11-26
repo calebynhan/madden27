@@ -144,7 +144,7 @@ export class UI {
       sec('Pre-snap (offense)', [['Snap ball', 'Space · A'], ['Hot route', 'H · Y'], ['Motion', 'M · LB'], ['Audible / flip', 'B · X'], ['Hard count', 'K'], ['Pass protection slide', 'L'], ['Show / hide play art', 'I · LT'], ['Timeout', 'T · Back'], ['Pause', 'Esc · Start']]) +
       sec('Passing', [['Throw to receiver', '1–5 · A B X Y RB'], ['Lob / touch / bullet', 'tap / medium / hold'], ['Lead the pass', 'hold a direction while releasing'], ['Throw it away', 'X'], ['Scramble', 'move with WASD / stick'], ['Aggressive catch', 'R · Y (hold)'], ['Possession catch', 'C · A (hold)']]) +
       sec('Ball carrier', [['Move', 'WASD / Arrows · Left stick'], ['Sprint', 'Shift · RT'], ['Juke left / right', 'Q / E · Right stick ←/→'], ['Spin', 'R · B'], ['Stiff arm', 'F · A'], ['Truck', 'C · Right stick ↑'], ['Hurdle', 'V · Y'], ['Stutter step', 'X · Right stick ↓'], ['Dive / QB slide', 'Z · X'], ['Protect ball (hold)', 'G · RB']]) +
-      sec('Defense', [['Switch player', 'Tab · B'], ['Dive tackle', 'Space · X'], ['Hit stick', 'F · Right stick ↑'], ['Strip ball', 'Q · RB'], ['Swat ball', 'E · X (ball in air)'], ['Play the ball (INT)', 'R · Y'], ['DL swim / bull rush', 'E / R · A / X'], ['Audible coverage', 'B · X (pre-snap)'], ['Shift D-line', 'J'], ['Show blitz / bail', 'N']]) +
+      sec('Defense', [['Switch player', 'Tab · B'], ['Dive tackle', 'Space · X'], ['Hit stick', 'F · Right stick ↑'], ['Strip ball', 'Q · RB'], ['Swat ball', 'E · X (ball in air)'], ['Play the ball (INT)', 'R · Y'], ['DL swim / bull rush', 'E / R · A / X'], ['Audible coverage', 'B · X (pre-snap)'], ['Assign defender (blitz, spy, zone, man)', 'H · Y (pre-snap)'], ['Coverage adjustments (shade, press, show blitz)', 'N · RB (pre-snap)'], ['Shift D-line', 'J · LB (pre-snap)']]) +
       sec('Special teams', [['Aim kick', '← → / Left stick'], ['Start / set power / accuracy', 'Space · A (3 presses)'], ['Fair catch (returner)', 'F'], ['Kneel in end zone', 'Z']]) +
       sec('Other', [['Instant replay (after play)', 'Y'], ['Skip post-play', 'Space · A'], ['Camera', 'Settings → Camera'], ['Replay: scrub / rotate', '← → / Q E'], ['Replay: play / pause', 'Space']]);
     el.appendChild(c);
@@ -162,12 +162,14 @@ export class UI {
     p.style.width = 'min(520px, 94vw)';
     p.innerHTML = '<h2>Settings</h2>';
     const rows = [
-      ['Graphics', 'graphics', ['low', 'medium', 'high'], (v) => v[0].toUpperCase() + v.slice(1)],
+      ['Graphics', 'graphics', ['auto', 'low', 'medium', 'high'], (v) => (v === 'auto' ? 'Auto (adapts to your laptop)' : v[0].toUpperCase() + v.slice(1))],
+      ['Show FPS', 'showFps', [false, true], (v) => (v ? 'On' : 'Off')],
       ['Camera', 'camera', ['standard', 'zoom', 'wide', 'high'], (v) => v[0].toUpperCase() + v.slice(1)],
       ['Volume', 'volume', [0, 0.25, 0.5, 0.7, 0.85, 1], (v) => `${Math.round(v * 100)}%`],
       ['Game speed', 'gameSpeed', [0.85, 1, 1.15], (v) => (v === 1 ? 'Normal' : v < 1 ? 'Slow' : 'Fast')],
       ['Auto sprint', 'autoSprint', [false, true], (v) => (v ? 'On' : 'Off')],
       ['Announcer voice', 'announcer', [true, false], (v) => (v ? 'On' : 'Off')],
+      ['Coach mode (call plays, CPU plays them)', 'coachMode', [false, true], (v) => (v ? 'On' : 'Off')],
       ['Play art pre-snap', 'showArt', [true, false], (v) => (v ? 'On' : 'Off')],
       ['Default difficulty', 'difficulty', [0, 1, 2, 3], (v) => DIFFICULTIES[v]],
       ['Default quarter length', 'quarterLen', [1, 2, 3, 4, 5, 6, 8, 10, 12, 15], (v) => `${v} min`],
@@ -318,6 +320,15 @@ export class UI {
     } else {
       app.startGame({ home: st.home, away: st.away, humans: [app.input.keyboard, null], settings: { difficulty: st.difficulty, quarterLen: 15, accel: false, weather: st.weather, time: st.time, practice: { side: st.practiceSide } } });
     }
+  }
+
+  // Optional frame-rate readout (Settings → Show FPS).
+  fpsFrame(r) {
+    if (!r) { if (this.fpsEl) this.fpsEl.style.display = 'none'; return; }
+    if (!this.fpsEl) { this.fpsEl = h('div', 'fps-meter'); this.root.appendChild(this.fpsEl); }
+    this.fpsEl.style.display = 'block';
+    const txt = `${Math.round(r.fps)} FPS${r.autoQ ? ` · ${Math.round(r.resScale * 100)}% res` : ''}`;
+    if (txt !== this.fpsTxt) { this.fpsTxt = txt; this.fpsEl.textContent = txt; }
   }
 
   // ------------------------------------------------------------------ input routing
@@ -562,13 +573,8 @@ export class UI {
         this.toast(`D-line: ${['Normal', 'Pinch', 'Spread'][sim.dlShift]}`, 1.2);
         return;
       }
-      if (a.includes('coverage_d')) {
-        sim.showBlitz = ((sim.showBlitz || 0) + 1) % 3;
-        for (const d of sim.def) if (d.pos === 'S' || d.pos === 'LB') d.presnapShift = { f: sim.showBlitz === 1 ? -2.5 : sim.showBlitz === 2 ? 2 : 0, l: 0 };
-        sim.realignDefense(false);
-        this.toast(['Base alignment', 'Show blitz', 'Bail / back off'][sim.showBlitz], 1.2);
-        return;
-      }
+      if (a.includes('hotroute')) return this.defHotRouteMenu(team, ev.source);
+      if (a.includes('coverage_d')) return this.coverageMenu(team, ev.source);
     }
     if (a.includes('playart')) { this.showArt = !this.showArt; this.drawArt(team); }
   }
@@ -617,6 +623,65 @@ export class UI {
       g.audibleDefense(team, it.p);
       this.drawArt(team);
       this.toast(`Coverage: ${it.p.name}`, 1.2);
+    }, { source, corner: true });
+  }
+
+  // Defensive hot route: re-assign the defender you control.
+  defHotRouteMenu(team, source) {
+    const sim = this.app.game.sim;
+    const d = sim.userEnt[team];
+    if (!d || d.side !== 'D') return;
+    const fl = sim.frame(d.x, d.y).l;
+    const st = sim.nums ? sim.nums.strong : 1;
+    const sideTag = Math.sign(fl || st) === st ? 'S' : 'W';
+    const gap = Math.abs(fl) < 1.3 ? 'A' : Math.abs(fl) < 2.6 ? 'B' : Math.abs(fl) < 4 ? 'C' : 'E';
+    const recs = sim.off.filter((e) => e.eligible && e.isActive());
+    const near = recs.slice().sort((a, b) => Math.hypot(a.x - d.x, a.y - d.y) - Math.hypot(b.x - d.x, b.y - d.y))[0];
+    const items = [
+      { label: 'Blitz', sub: `${gap} gap`, a: `b:${gap}_${sideTag}` },
+      { label: 'QB spy', a: 'spy' },
+      { label: 'Hook zone', a: `z:hook_${Math.abs(fl) < 2 ? 'M' : sideTag}` },
+      { label: 'Curl / flat zone', a: `z:curl_${sideTag}` },
+      { label: 'Flat zone', a: `z:flat_${sideTag}` },
+      { label: 'Deep half', a: `z:deep_half_${sideTag}` },
+      { label: 'Deep middle', a: 'z:deep_mid' },
+    ];
+    if (near) items.push({ label: `Man: ${near.tag} #${near.num} ${near.p.last}`, a: 'm:S1', man: near });
+    if (d.pos === 'DL' || d.pos === 'LB') items.push({ label: 'Contain rush', a: 'contain' });
+    items.forEach((it, i) => { it.hotkey = i + 1; });
+    this.openPopup(`Assign #${d.num} ${d.p.last} (${d.tag})`, items, (it) => {
+      if (this.app.game.sim !== sim || sim.phase !== 'presnap') return;
+      sim.setDefAssign(d, it.a, it.man || null);
+      this.drawArt(team);
+      this.toast(`#${d.num}: ${it.label}`, 1.2);
+    }, { source, corner: true });
+  }
+
+  // Coverage adjustments for the whole defense.
+  coverageMenu(team, source) {
+    const sim = this.app.game.sim;
+    const items = [
+      { label: 'Base alignment', show: 0 },
+      { label: 'Show blitz', sub: 'Walk LBs and safeties up', show: 1 },
+      { label: 'Bail / back off', sub: 'Disguise with depth', show: 2 },
+      { label: 'Shade inside', sub: 'Take away slants and digs', shade: 'inside' },
+      { label: 'Shade outside', sub: 'Take away outs and corners', shade: 'outside' },
+      { label: 'Play underneath', sub: 'Jump short routes, risk deep', shade: 'under' },
+      { label: 'Over the top', sub: 'No deep shots, give up short', shade: 'over' },
+      { label: 'No shading', shade: null },
+      { label: 'Press coverage', sub: 'Jam at the line', press: true },
+      { label: 'Play off', sub: 'Cushion', press: false },
+    ].map((it, i) => ({ ...it, hotkey: i < 9 ? i + 1 : 0 }));
+    this.openPopup('Coverage adjustments', items, (it) => {
+      if (this.app.game.sim !== sim || sim.phase !== 'presnap') return;
+      if (it.show !== undefined) {
+        sim.showBlitz = it.show;
+        for (const d of sim.def) if (d.pos === 'S' || d.pos === 'LB') d.presnapShift = { f: it.show === 1 ? -2.5 : it.show === 2 ? 2 : 0, l: 0 };
+        sim.realignDefense(false);
+      } else if ('shade' in it) sim.setCoverageAdjust('shade', it.shade);
+      else sim.setCoverageAdjust('press', it.press);
+      this.drawArt(team);
+      this.toast(it.label, 1.2);
     }, { source, corner: true });
   }
 
@@ -739,7 +804,7 @@ export class UI {
       this.pcRefresh = (this.pcRefresh || 0) + dt;
       if (this.pcRefresh > 0.5) { this.pcRefresh = 0; const el = this.layer.playcall.querySelector('.pc-head b'); if (el) el.textContent = Math.max(0, Math.ceil(g.playClock)); }
     }
-    if (g.phase === 'presnap' && g.sim && g.sim.kind !== 'scrimmage' && g.isUser(g.sim.offIdx) && !this.km && g.sim.phase === 'presnap') this.startKickMeter();
+    if (g.phase === 'presnap' && g.sim && g.sim.kind !== 'scrimmage' && g.isUser(g.sim.offIdx) && !g.isCoach(g.sim.offIdx) && !this.km && g.sim.phase === 'presnap') this.startKickMeter();
     if (this.km) this.updateKickMeter(dt, app.humans[g.sim?.offIdx]);
   }
 
@@ -807,8 +872,9 @@ export class UI {
     const pad = userTeam !== undefined && app.humans[userTeam] && app.humans[userTeam].kind === 'gamepad';
     const k = (kb, gp) => `<span class="kbd">${pad ? gp : kb}</span>`;
     if (g.phase === 'presnap' && sim && sim.kind === 'scrimmage' && userTeam !== undefined) {
-      if (g.isUser(sim.offIdx)) html = `<div>${k('Space', 'A')} Snap ${k('H', 'Y')} Hot route ${k('M', 'LB')} Motion</div><div>${k('B', 'X')} Audible ${k('K', '—')} Hard count ${k('L', '—')} Protect ${k('I', 'LT')} Art</div>`;
-      else html = `<div>${k('Tab', 'B')} Switch ${k('B', 'X')} Coverage audible</div><div>${k('J', '—')} D-line shift ${k('N', '—')} Show blitz ${k('I', 'LT')} Art</div>`;
+      if (g.isCoach(sim.offIdx)) html = `<div>Coach mode — ${k('H', 'Y')} Hot route ${k('M', 'LB')} Motion ${k('B', 'X')} Audible ${k('L', '—')} Protect</div>`;
+      else if (g.isUser(sim.offIdx)) html = `<div>${k('Space', 'A')} Snap ${k('H', 'Y')} Hot route ${k('M', 'LB')} Motion</div><div>${k('B', 'X')} Audible ${k('K', '—')} Hard count ${k('L', '—')} Protect ${k('I', 'LT')} Art</div>`;
+      else html = `<div>${k('Tab', 'B')} Switch ${k('B', 'X')} Audible ${k('H', 'Y')} Assign player</div><div>${k('N', 'RB')} Coverage ${k('J', 'LB')} D-line shift ${k('I', 'LT')} Art</div>`;
     } else if (g.phase === 'live' && sim && userTeam !== undefined) {
       const u = sim.userEnt[userTeam];
       if (u && u.hasBall && u === sim.qb && !sim.thrown && sim.playType !== 'run' && !u.qbRunner) html = `<div>${k('1-5', 'A B X Y RB')} Throw (tap=lob · hold=bullet)</div><div>${k('X', 'LB')} Throw away · move to scramble</div>`;
@@ -833,7 +899,7 @@ export class UI {
     const r = this.app.renderer;
     let html = '';
     if (sim && inPlay && sim.kind === 'scrimmage' && (g.phase === 'presnap' || g.phase === 'live')) {
-      const offUser = g.isUser(sim.offIdx);
+      const offUser = g.isUser(sim.offIdx) && !g.isCoach(sim.offIdx);
       const qbHas = sim.qb && (sim.qb.hasBall || sim.phase === 'presnap' || sim.ball.state === 'snap') && !sim.thrown && !sim.qb.qbRunner;
       if (offUser && qbHas && sim.playType !== 'run' && sim.icons) {
         const src = this.app.humans[sim.offIdx];

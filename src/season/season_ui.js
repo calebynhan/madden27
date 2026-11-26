@@ -6,6 +6,8 @@ import { DIFFICULTIES, RATING_LABELS } from '../core/constants.js';
 import { RNG } from '../core/rng.js';
 import { badgeHTML } from '../ui/ui.js';
 import * as L from './league.js';
+import { refreshTeamState } from '../data/league.js';
+import { buildDepthChart } from '../data/roster.js';
 
 const h = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; };
 const rec = (r) => `${r.w}-${r.l}${r.t ? '-' + r.t : ''}`;
@@ -277,14 +279,32 @@ export class SeasonUI {
     const ts = L.teamStates(s)[s.userTeam];
     const order = ['QB', 'HB', 'FB', 'WR', 'TE', 'OT', 'OG', 'C', 'DE', 'DT', 'OLB', 'MLB', 'CB', 'FS', 'SS', 'K', 'P'];
     const key = { QB: ['thp', 'sac', 'dac'], HB: ['spd', 'btk', 'elu'], FB: ['rbk', 'str', 'car'], WR: ['spd', 'cth', 'rte'], TE: ['cth', 'rbk', 'spd'], OT: ['pbk', 'rbk', 'str'], OG: ['rbk', 'pbk', 'str'], C: ['rbk', 'pbk', 'awr'], DE: ['fmv', 'pmv', 'bsh'], DT: ['bsh', 'pmv', 'str'], OLB: ['tak', 'pur', 'zcv'], MLB: ['tak', 'prc', 'pur'], CB: ['mcv', 'zcv', 'spd'], FS: ['zcv', 'spd', 'prc'], SS: ['zcv', 'tak', 'pow'], K: ['kpw', 'kac', 'awr'], P: ['kpw', 'kac', 'awr'] };
-    let html = `<div style="font-size:12px;color:var(--dim);margin-bottom:8px">Depth chart is ordered by overall rating and updates automatically. Ratings: ${ts.ratings.ovr} OVR · ${ts.ratings.off} OFF · ${ts.ratings.def} DEF</div><div class="cards">`;
+    const starters = { QB: 1, HB: 1, FB: 1, WR: 3, TE: 1, OT: 2, OG: 2, C: 1, DE: 2, DT: 2, OLB: 2, MLB: 1, CB: 3, FS: 1, SS: 1, K: 1, P: 1 };
+    let html = `<div style="font-size:12px;color:var(--dim);margin-bottom:8px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span>Depth chart: use ▲ ▼ to set your starters (highlighted). Changes carry into your games and sims. Team ratings: <b>${ts.ratings.ovr}</b> OVR · ${ts.ratings.off} OFF · ${ts.ratings.def} DEF</span><button class="btn" data-auto="1" style="padding:4px 10px">Auto-sort by OVR</button></div><div class="cards">`;
     for (const pos of order) {
       const ids = ts.depth[pos] || [];
       const k = key[pos];
-      html += `<div class="card"><h4>${pos}</h4><table><tr><th class="l">Player</th><th>OVR</th><th>Age</th>${k.map((x) => `<th title="${RATING_LABELS[x]}">${x.toUpperCase()}</th>`).join('')}</tr>${ids.map((id, i) => { const p = ts.byId.get(id); if (!p) return ''; return `<tr class="${i === 0 ? 'me' : ''}"><td class="l">#${p.num} ${p.first[0]}. ${p.last}${p.dev !== 'Normal' ? ` <small style="color:var(--accent2)">${p.dev === 'Superstar' ? '★★' : '★'}</small>` : ''}${p.rookie ? ' <small style="color:var(--good)">R</small>' : ''}</td><td><b>${p.ovr}</b></td><td>${p.age}</td>${k.map((x) => `<td>${p.r[x]}</td>`).join('')}</tr>`; }).join('')}</table></div>`;
+      const n = starters[pos] || 1;
+      html += `<div class="card"><h4>${pos}</h4><table><tr><th></th><th class="l">Player</th><th>OVR</th><th>Age</th>${k.map((x) => `<th title="${RATING_LABELS[x]}">${x.toUpperCase()}</th>`).join('')}</tr>${ids.map((id, i) => { const p = ts.byId.get(id); if (!p) return ''; return `<tr class="${i < n ? 'me' : ''}"><td class="dc"><button class="dcb" data-pos="${pos}" data-i="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''} title="Move up">▲</button><button class="dcb" data-pos="${pos}" data-i="${i}" data-d="1" ${i === ids.length - 1 ? 'disabled' : ''} title="Move down">▼</button></td><td class="l">#${p.num} ${p.first[0]}. ${p.last}${p.dev !== 'Normal' ? ` <small style="color:var(--accent2)">${p.dev === 'Superstar' ? '★★' : '★'}</small>` : ''}${p.rookie ? ' <small style="color:var(--good)">R</small>' : ''}</td><td><b>${p.ovr}</b></td><td>${p.age}</td>${k.map((x) => `<td>${p.r[x]}</td>`).join('')}</tr>`; }).join('')}</table></div>`;
     }
     html += '</div>';
     body.innerHTML = html;
+    const commit = () => { refreshTeamState(ts); L.saveSeason(s); this.hub(); };
+    body.querySelectorAll('.dcb').forEach((b) => {
+      b.onclick = () => {
+        const arr = ts.depth[b.dataset.pos];
+        const i = +b.dataset.i, j = i + +b.dataset.d;
+        if (!arr || j < 0 || j >= arr.length) return;
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+        commit();
+      };
+    });
+    const auto = body.querySelector('[data-auto]');
+    if (auto) auto.onclick = () => {
+      const fresh = buildDepthChart(ts.players);
+      for (const pos of Object.keys(fresh)) ts.depth[pos] = fresh[pos];
+      commit();
+    };
   }
 
   playoffsTab(body) {

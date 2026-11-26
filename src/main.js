@@ -11,7 +11,7 @@ import { RNG } from './core/rng.js';
 import { DT } from './core/constants.js';
 import { SeasonUI } from './season/season_ui.js';
 
-const DEFAULT_SETTINGS = { graphics: 'medium', camera: 'standard', volume: 0.7, gameSpeed: 1, autoSprint: false, showArt: true, difficulty: 1, quarterLen: 5, announcer: true };
+const DEFAULT_SETTINGS = { graphics: 'auto', showFps: false, camera: 'standard', volume: 0.7, gameSpeed: 1, autoSprint: false, showArt: true, difficulty: 1, quarterLen: 5, announcer: true, coachMode: false };
 
 class App {
   constructor() {
@@ -49,6 +49,7 @@ class App {
     if (key === 'volume') this.audio.setVolume(this.settings.volume);
     if (key === 'announcer') this.audio.announcer = this.settings.announcer;
     if (key === 'camera') this.view.camMode = this.settings.camera;
+    if (key === 'graphics') this.renderer.setQuality(this.settings.graphics);
     if (key === 'autoSprint') for (const s of this.input.sources()) s.autoSprint = this.settings.autoSprint;
     this.saveSettings();
   }
@@ -106,7 +107,8 @@ class App {
     // Controllers array is shared with the sim; entries are refreshed each tick.
     const controllers = [humans[0] ? humans[0].controller(1) : null, humans[1] ? humans[1].controller(1) : null];
     const rng = new RNG((Math.random() * 1e9) >>> 0);
-    this.game = new Game({ teams: ts, settings: Object.assign({ gameSpeed: this.settings.gameSpeed }, settings), controllers, rng, scenario });
+    const coachMode = !!this.settings.coachMode && !scenario && !(settings && settings.practice);
+    this.game = new Game({ teams: ts, settings: Object.assign({ gameSpeed: this.settings.gameSpeed, coachMode }, settings), controllers, rng, scenario });
     this.game.seasonGame = season || null;
     this.gameOpts = { home, away, humans, settings, scenario, season, teams };
     this.renderer.setupGame(this.game);
@@ -286,6 +288,7 @@ class App {
     }
     this.renderer.update(dt, g, this.view);
     if (this.game) this.ui.postFrame(dt);
+    this.ui.fpsFrame(this.settings.showFps ? this.renderer : null);
     this.audio.tick(dt);
   }
 

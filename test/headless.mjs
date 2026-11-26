@@ -14,7 +14,7 @@ let errors = 0;
 for (let g = 0; g < N; g++) {
   const rng = new RNG(1000 + g * 7919);
   const a = rng.int(0, 31); let b = rng.int(0, 31); if (b === a) b = (a + 1) % 32;
-  const game = new Game({ teams: [teams[a], teams[b]], settings: { quarterLen: qlen, difficulty: 2, accel: true, accelTo: 7 }, rng, headless: true });
+  const game = new Game({ teams: [teams[a], teams[b]], settings: { quarterLen: qlen, difficulty: 2, accel: true, accelTo: 5 }, rng, headless: true });
   let steps = 0;
   try {
     game.start();
@@ -51,4 +51,16 @@ console.log(` Rush att ${f(agg.rushAtt / G)} [26.8]  YPC ${f(agg.rushYds / Math.
 console.log(` Punts ${f(agg.punts / G, 2)} [~3.5]  Avg ${f(agg.puntYds / Math.max(1, agg.punts))} [~48]  FG ${agg.fgm}/${agg.fga} ${f(100 * agg.fgm / Math.max(1, agg.fga))}% [85.6]  XP ${f(100 * agg.xpm / Math.max(1, agg.xpa))}% [95.9]`);
 console.log(` 3rd down ${f(100 * agg.thirdConv / Math.max(1, agg.third))}% [39.9]  4th down ${agg.fourthConv}/${agg.fourth}  2PT ${agg.twoC}/${agg.two}  Penalties ${f(agg.penalties / G, 2)} [6.4]`);
 console.log(` KR avg ${f(agg.krYds / Math.max(1, agg.kr))}  touchbacks ${agg.tb}  OT games ${agg.ot}  ties ${agg.ties}`);
+// Sanity bands: wide enough for small samples, tight enough to catch a broken subsystem
+// (e.g. no pass rush, no run defense, no passing game).
+if (agg.games >= 6 && qlen >= 10) {
+  const checks = [
+    ['sacks per team', agg.sacks / G, 0.4, 5],
+    ['rush YPC', agg.rushYds / Math.max(1, agg.rushAtt), 2.5, 6.5],
+    ['completion %', (100 * agg.passCmp) / Math.max(1, agg.passAtt), 50, 78],
+    ['points per team', agg.pts / G, 10, 45],
+    ['punts per team', agg.punts / G, 1, 7],
+  ];
+  for (const [name, v, lo, hi] of checks) if (!(v >= lo && v <= hi)) { errors++; console.error(`SANITY FAIL: ${name} ${v.toFixed(2)} outside [${lo}, ${hi}]`); }
+}
 if (errors) process.exit(1);
