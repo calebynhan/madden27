@@ -321,8 +321,17 @@ export class PlayerModel {
         head: -lean * 0.6,
       });
     };
+    // Side shuffle: athletic stance, short lateral steps (defenders mirroring while facing the QB).
+    const shuffle = (sp) => {
+      const k = Math.min(1, sp / 4.5);
+      this.phase += dt * (8 + sp * 1.5);
+      const s = Math.sin(this.phase);
+      T[BPY] = Math.abs(Math.cos(this.phase)) * 0.05 * k;
+      this.pose({ hipY: 0.9, lean: 0.42, legs: [[0.62, -0.95 + Math.max(0, s) * 0.35 * k, -0.12 - s * 0.24 * k], [0.62, -0.95 + Math.max(0, -s) * 0.35 * k, 0.12 - s * 0.24 * k]], arms: [[-0.55, -0.3, -1.0], [-0.55, 0.3, -1.0]], head: -0.25 });
+    };
     switch (anim) {
-      case 'run': case 'shuffle': run(speed); break;
+      case 'run': run(speed); break;
+      case 'shuffle': if (speed > 5) run(speed); else shuffle(speed); break;
       case 'carry': run(speed, true); break;
       case 'backpedal': run(speed, false, true); break;
       case 'stance3':

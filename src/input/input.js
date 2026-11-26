@@ -3,12 +3,12 @@
 
 export const KEYMAP = {
   KeyW: ['up'], ArrowUp: ['up'], KeyS: ['down'], ArrowDown: ['down'], KeyA: ['left'], ArrowLeft: ['left'], KeyD: ['right'], ArrowRight: ['right'],
-  ShiftLeft: ['sprint'], ShiftRight: ['sprint'],
+  ShiftLeft: ['sprint', 'lobmod'], ShiftRight: ['sprint', 'lobmod'],
   Space: ['snap', 'tackle', 'kick', 'confirm'],
   Digit1: ['pass1'], Digit2: ['pass2'], Digit3: ['pass3'], Digit4: ['pass4'], Digit5: ['pass5'],
   Numpad1: ['pass1'], Numpad2: ['pass2'], Numpad3: ['pass3'], Numpad4: ['pass4'], Numpad5: ['pass5'],
   KeyQ: ['juke_l', 'strip'], KeyE: ['juke_r', 'swat', 'swim', 'catch_rac'], KeyR: ['spin', 'catch_aggr', 'bull'],
-  KeyF: ['stiff', 'hitstick', 'fair'], KeyC: ['truck', 'catch_poss'], KeyV: ['hurdle'], KeyZ: ['dive', 'kneel'],
+  KeyF: ['stiff', 'hitstick', 'fair'], KeyC: ['truck', 'catch_poss', 'strafe'], KeyV: ['hurdle'], KeyZ: ['dive', 'kneel'],
   KeyX: ['pitch', 'stutter', 'throwaway'], KeyG: ['protect'], Tab: ['switch'],
   KeyH: ['hotroute'], KeyM: ['motion'], KeyB: ['audible'], KeyK: ['hardcount'], KeyL: ['protection'], KeyI: ['playart'],
   KeyT: ['timeout'], Escape: ['pause', 'back'], Enter: ['confirm'], KeyY: ['replay'], KeyP: ['pause'],
@@ -147,7 +147,9 @@ export class Input {
         for (const a of acts) { src.press(a, now); src.release(a, now + 30); }
         for (const a of acts) src.held.delete(a);
       } else if (mag < 0.3) src.rsLatch = false;
-      if (gp.buttons[6]?.value > 0.5) src.held.add('playart'); else src.held.delete('playart');
+      // LT: strafe on defense, lob modifier on a pass (held)
+      if (gp.buttons[6]?.value > 0.5) { src.held.add('playart'); src.held.add('strafe'); src.held.add('lobmod'); }
+      else { src.held.delete('playart'); src.held.delete('strafe'); src.held.delete('lobmod'); }
     }
   }
 

@@ -2,13 +2,24 @@
 import { clamp, dist } from '../core/util.js';
 import { FIELD_WIDTH } from '../core/constants.js';
 import { startMove, runnerAI } from './runner.js';
-import { startThrow, throwAway } from './passing.js';
+import { startThrow, throwAway, evalTarget } from './passing.js';
 import { updateOffense, optionPitch, rpoPullAndThrow } from './ai_offense.js';
 import { updateDefense } from './ai_defense.js';
 import { fumble } from './contact.js';
 
 export function passTypeFromHold(sec) {
   return sec < 0.14 ? 'lob' : sec < 0.33 ? 'touch' : 'bullet';
+}
+
+// Human pass type: a tap lets the game pick the right touch for the throw (firm on short
+// throws, touch over the middle, lofted deep); holding the button throws a bullet; the lob
+// modifier (Shift on the keyboard — unless sprinting — or LT) floats it.
+export const BULLET_HOLD = 0.25;
+export function userPassType(sim, qb, r, hold, ctl, moving) {
+  if (ctl.held.has('lobmod') && !(moving && ctl.held.has('sprint'))) return 'lob';
+  if (hold >= BULLET_HOLD) return 'bullet';
+  const ev = evalTarget(sim, qb, r);
+  return ev ? ev.type : 'touch';
 }
 
 export function updateUser(sim, u, ctl, dt) {
@@ -31,7 +42,8 @@ export function updateUser(sim, u, ctl, dt) {
         if (hold !== undefined) {
           const r = sim.icons ? sim.icons[i - 1] : null;
           if (r && r.isActive()) {
-            startThrow(sim, u, r, passTypeFromHold(hold), moving ? { x: ctl.mx, y: ctl.my } : null);
+            // Holding the button loads the throw, so the ball comes out quicker on release.
+            startThrow(sim, u, r, userPassType(sim, u, r, hold, ctl, moving), moving ? { x: ctl.mx, y: ctl.my } : null, hold >= BULLET_HOLD ? 0.5 : 1);
             return;
           }
         }
@@ -52,7 +64,7 @@ export function updateUser(sim, u, ctl, dt) {
         const hold = ctl.released.get('pass' + i);
         if (hold === undefined) continue;
         const r = sim.icons ? sim.icons[i - 1] : null;
-        if (r && r.isActive() && r.tag === sim.rpo.tag) { rpoPullAndThrow(sim, u, r, passTypeFromHold(hold)); return; }
+        if (r && r.isActive() && r.tag === sim.rpo.tag) { rpoPullAndThrow(sim, u, r, userPassType(sim, u, r, hold, ctl, moving)); return; }
       }
     }
     updateOffense(sim, u, dt); // auto dropback / handoff / kneel / spike
@@ -135,6 +147,45 @@ export function updateUser(sim, u, ctl, dt) {
     }
     if (u.stripCd > 0) u.stripCd -= dt;
     if (ctl.pressed.has('swat') || ctl.pressed.has('catch_aggr')) u.anim = 'swat';
+  }
+  if (onDefense) {
+    const c = sim.carrier;
+    // Play the ball (hold R / Y while the pass is in the air): run to the spot and go up for it.
+    const fl = sim.ball.flight;
+    if (ctl.pressed.has('catch_aggr')) u.playBallT = sim.t;
+    const playing = fl && sim.thrown && sim.ball.state === 'air' && !fl.resolved && fl.type !== 'away' && (ctl.held.has('catch_aggr') || ctl.pressed.has('catch_aggr'));
+    if (playing && !u.lunge) {
+      const dd = dist(u.x, u.y, fl.tx, fl.ty);
+      // The assist only helps with the last few yards (the break and the leap); getting into
+      // the passing lane is up to you, and the stick wins when you steer.
+      if (dd < 4.5) {
+        let ax = (fl.tx - u.x) / Math.max(0.1, dd), ay = (fl.ty - u.y) / Math.max(0.1, dd);
+        if (moving) { const w = dd < 2 ? 0.5 : 0.3; ax = ax * w + ctl.mx * (1 - w); ay = ay * w + ctl.my * (1 - w); }
+        const al = Math.hypot(ax, ay) || 1;
+        const sp = u.topSpeed * (dd < 0.6 ? 0.3 : 1);
+        u.setDesired((ax / al) * sp, (ay / al) * sp);
+        u.anim = dd < 2.4 ? 'swat' : 'run';
+        u.idleT = 0;
+        return;
+      }
+    }
+    // Strafe (hold C / LT): keep facing the QB (or the ball carrier) while moving, at a controlled pace.
+    if (ctl.held.has('strafe') && !u.lunge) {
+      const tgt = c && c.team !== u.team ? c : sim.qb;
+      if (tgt) u.faceTo = Math.atan2(tgt.y - u.y, tgt.x - u.x);
+      u.idleT = 0;
+      if (moving) {
+        const sp = u.topSpeed * 0.68;
+        u.setDesired(ctl.mx * sp, ctl.my * sp);
+        let diff = Math.abs(Math.atan2(ctl.my, ctl.mx) - (u.faceTo ?? u.face));
+        if (diff > Math.PI) diff = Math.PI * 2 - diff;
+        if (u.anim !== 'swat') u.anim = diff > 2.1 ? 'backpedal' : diff > 0.9 ? 'shuffle' : 'run';
+      } else {
+        u.setDesired(u.vx * 0.85, u.vy * 0.85);
+        if (u.anim !== 'swat') u.anim = 'stance2';
+      }
+      return;
+    }
   }
   if (u.lunge > 0) { u.setDesired(u.vx, u.vy); return; }
   if (moving) { manual(); if (u.anim !== 'swat') u.anim = 'run'; return; }

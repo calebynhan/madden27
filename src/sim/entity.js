@@ -105,7 +105,10 @@ export class Entity {
     if (a > maxDv) { this.vx += (ax / a) * maxDv; this.vy += (ay / a) * maxDv; }
     else { this.vx = dvx; this.vy = dvy; }
     this.x += this.vx * dt; this.y += this.vy * dt;
-    if (this.speed > 0.6) {
+    // Facing follows the direction of travel unless the AI (or a strafing user) keeps
+    // his eyes on something, e.g. a defensive back backpedalling while watching the QB.
+    if (this.faceTo !== null && this.faceTo !== undefined) this.turnToward(this.faceTo, dt * 9);
+    else if (this.speed > 0.6) {
       const target = Math.atan2(this.vy, this.vx);
       this.turnToward(target, dt * 10);
     }

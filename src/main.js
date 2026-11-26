@@ -228,7 +228,8 @@ class App {
     const sim = g.sim;
     if (!sim) return;
     let dir = sim.dir;
-    const humans = [0, 1].filter((t) => g.isUser(t));
+    const humans = [0, 1].filter((t) => g.isUser(t) && !g.isCoach(t));
+    this.view.userTeam = humans.length === 1 ? humans[0] : null;
     if (sim.kind === 'scrimmage') {
       if (humans.length === 1 && humans[0] !== sim.offIdx) dir = -sim.dir;
       if (sim.carrier && sim.carrier.team !== sim.offIdx && humans.length === 1 && humans[0] === sim.carrier.team) dir = sim.attackDir(sim.carrier.team);

@@ -314,6 +314,7 @@ export class PlaySim {
       this.ball.z = fl.sz + (fl.tz - fl.sz) * k + Math.sin(k * Math.PI) * 0.3;
       if (k >= 1) this.giveBall(this.qb, false);
     }
+    for (const e of this.ents) e.faceTo = null;
     // Decide desired velocities
     if (this.kind === 'scrimmage') {
       for (const e of this.ents) {

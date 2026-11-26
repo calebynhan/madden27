@@ -46,6 +46,10 @@ export class Renderer {
     this.ring = makeRing(0x2fd5ff);
     this.ring2 = makeRing(0xff7a2f);
     this.scene.add(this.ring, this.ring2);
+    // Where a pass will come down (shown to a human playing the ball or the catch)
+    this.landRing = makeRing(0xfff1a8);
+    this.landRing.visible = false;
+    this.scene.add(this.landRing);
     this.lines = this.makeLines();
     this.artGroup = new THREE.Group();
     this.scene.add(this.artGroup);
@@ -332,6 +336,12 @@ export class Renderer {
       }
     }
     for (let i = ri; i < 2; i++) rings[i].visible = false;
+    const fl = sim && sim.thrown && sim.ball.state === 'air' && sim.ball.flight && !sim.ball.pitch && sim.ball.flight.type !== 'away' && !sim.ball.flight.resolved ? sim.ball.flight : null;
+    if (fl && view.userTeam !== null && view.userTeam !== undefined && sim.kind === 'scrimmage') {
+      this.landRing.visible = true;
+      this.landRing.position.set(toX(fl.tx), 0.05, toZ(fl.ty));
+      this.landRing.scale.setScalar(1.1 + 0.18 * Math.sin(performance.now() / 85));
+    } else this.landRing.visible = false;
     // Wind ribbons + weather
     this.updateWeather(dt, game);
     this.updateCamera(dt, game, sim, view);
@@ -508,6 +518,35 @@ export class Renderer {
       if (sim.kind !== 'scrimmage' && sim.carrier && sim.carrier.team === sim.recvTeam && view.followReturn) dir = sim.attackDir(sim.carrier.team);
       else if (sim.kind === 'scrimmage' && sim.carrier && sim.carrier.team !== sim.offIdx && view.followReturn) dir = sim.attackDir(sim.carrier.team);
     }
+    // Defense (Madden-style): sit high behind your defense with a wider lens and keep both
+    // the ball and the defender you control in the frame, so deep coverage never drops
+    // out of view behind the camera.
+    const ut = view.userTeam;
+    const defView = !!(sim && sim.kind === 'scrimmage' && ut !== null && ut !== undefined && ut !== sim.offIdx && !(sim.carrier && sim.carrier.team === ut));
+    let fovT = 46;
+    if (defView && cfg !== CAM.high) {
+      const u = sim.userEnt ? sim.userEnt[ut] : null;
+      const sdir = sim.dir;
+      const wide = cfg === CAM.wide ? 1.25 : cfg === CAM.zoom ? 0.82 : 1;
+      if (sim.phase === 'presnap' || !sim.t) {
+        fx = sim.losX + sdir * 5.5; fy = sim.ballY0;
+        back = 20 * wide; height = 16 * wide; ahead = 4.5;
+      } else {
+        const b = sim.ball;
+        let bx = b.x, by = b.y;
+        if (b.state === 'air' && b.flight) { bx = b.x * 0.35 + b.flight.tx * 0.65; by = b.y * 0.35 + b.flight.ty * 0.65; }
+        let spread = 0;
+        if (u && u.isActive()) {
+          fx = bx * 0.55 + u.x * 0.45; fy = by * 0.6 + u.y * 0.4;
+          spread = Math.hypot(bx - u.x, (by - u.y) * 0.6);
+        } else { fx = bx; fy = by; }
+        // Never let the focus drift into the offensive backfield past the line early in the play.
+        if ((fx - sim.losX) * sdir < 2 && !sim.carrier) fx = fx * 0.5 + (sim.losX + sdir * 2) * 0.5;
+        back = Math.min(26, 17.5 + spread * 0.3) * wide; height = Math.min(17, 12.5 + spread * 0.16) * wide; ahead = 3.5;
+      }
+      fovT = 54;
+    }
+    if (Math.abs(this.camera.fov - fovT) > 0.05) { this.camera.fov += (fovT - this.camera.fov) * (1 - Math.exp(-dt * 3)); this.camera.updateProjectionMatrix(); }
     // Smooth focus
     if (!this.camFocus) this.camFocus = { x: fx, y: fy, dir };
     const kf = 1 - Math.exp(-dt * (sim && sim.phase !== 'presnap' ? 5 : 3));

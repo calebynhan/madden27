@@ -46,7 +46,8 @@ npm test           # headless CPU-vs-CPU games with realism stats
 |---|---|---|
 | Move / sprint | WASD or arrows / Shift | Left stick / RT |
 | Snap | Space | A |
-| Throw to receiver | 1–5 (tap = lob, medium = touch, hold = bullet) | A B X Y RB |
+| Throw to receiver (the number/button floats over him; open receivers glow) | 1–5: tap = the right pass for the throw, hold = bullet | A B X Y RB (tap / hold) |
+| Lob | Shift + 1–5 | LT + button |
 | Lead the pass | Hold a direction while releasing | Left stick |
 | Throw away | X | LB |
 | Catch type while the ball is in the air: aggressive / possession / run-after-catch | hold R / C / E | hold Y / A / X |
@@ -58,9 +59,11 @@ npm test           # headless CPU-vs-CPU games with realism stats
 | Juke / spin / stiff arm | Q E / R / F | Right stick ← → / B / A |
 | Truck / hurdle / stutter / dive | C / V / X / Z | Right stick ↑ / Y / right stick ↓ / X |
 | Protect ball | G (hold) | RB |
-| Switch defender | Tab | B |
+| Switch to the defender nearest the ball | Tab | B |
+| Strafe (face the QB while you move) | hold C | hold LT |
+| Play the ball / user interception (a ring shows where it's coming down) | hold R while the pass is in the air | hold Y |
 | Dive tackle / hit stick / strip | Space / F / Q | X / right stick ↑ / RB |
-| Swat / play the ball | E / R | X / Y |
+| Swat | E | X |
 | DL swim / bull rush | E / R | A / X |
 | Defensive audible | B | X |
 | Assign your defender (blitz, QB spy, hook/curl/flat/deep zone, man on a receiver, contain) | H | Y |

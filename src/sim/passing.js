@@ -159,9 +159,9 @@ export function evalTarget(sim, qb, r, forceType) {
 // The throwing motion: the decision is made now and the ball leaves the hand a beat
 // later (arm cocks, then whips forward). A rusher who gets home in between still
 // makes the sack, and can knock the ball loose.
-export function startThrow(sim, qb, r, type, place = null) {
+export function startThrow(sim, qb, r, type, place = null, relScale = 1) {
   if (!qb.hasBall || sim.thrown || sim.pendingThrow) return false;
-  let rel = qb.user ? 0.17 : clamp(0.3 - ((qb.r.thp ?? 80) - 80) * 0.003, 0.22, 0.36);
+  let rel = (qb.user ? 0.17 : clamp(0.3 - ((qb.r.thp ?? 80) - 80) * 0.003, 0.22, 0.36)) * relScale;
   if (r && r.route && r.route.depthClass === 'screen') rel *= 0.6; // screens are a quick flick
   sim.pendingThrow = { r, type, place, at: sim.t + rel, t0: sim.t };
   qb.windup = rel;
@@ -315,7 +315,8 @@ export function updateBall(sim, dt) {
         const tgt = fl.target;
         for (const d of sim.def) {
           if (!d.isActive() || d.engaged) continue;
-          if (dist(d.x, d.y, b.x, b.y) >= 0.8 || b.z >= 2.4 + (d.r.jmp ?? 60) * 0.006) continue;
+          const uReach = d.user && d.playBallT !== undefined && sim.t - d.playBallT < 0.6 ? 1.3 : 0.8;
+          if (dist(d.x, d.y, b.x, b.y) >= uReach || b.z >= 2.4 + (d.r.jmp ?? 60) * 0.006) continue;
           // Must be in front of the receiver along the ball's path
           if (tgt) {
             const toRx = tgt.x - fl.sx, toRy = tgt.y - fl.sy;
@@ -433,9 +434,18 @@ export function resolveCatch(sim, undercutter) {
   const recIn = r && r.isActive() && dist(r.x, r.y, b.x, b.y) < R && b.z < 3.3 ? r : null;
   const recD = recIn ? dist(recIn.x, recIn.y, b.x, b.y) : 99;
   sim.catchErr = r ? dist(r.x, r.y, b.x, b.y) : 99;
-  const defs = sim.def.filter((d) => d.isActive() && !d.engaged && dist(d.x, d.y, b.x, b.y) < R && b.z < 2.6 + (d.r.jmp ?? 60) * 0.009);
+  // A user defender playing the ball (R / Y) gets a bigger window to go up and get it.
+  const userPlaying = (d) => {
+    if (!d.user) return false;
+    const uc = sim.ctl(d.team);
+    return !!((uc && (uc.held.has('catch_aggr') || uc.pressed.has('catch_aggr'))) || (d.playBallT !== undefined && sim.t - d.playBallT < 0.6));
+  };
+  const defs = sim.def.filter((d) => d.isActive() && !d.engaged && dist(d.x, d.y, b.x, b.y) < (userPlaying(d) ? 2.1 : R) && b.z < 2.6 + (d.r.jmp ?? 60) * 0.009 + (userPlaying(d) ? 0.4 : 0));
   if (undercutter && !defs.includes(undercutter)) defs.push(undercutter);
   defs.sort((a, c) => dist(a.x, a.y, b.x, b.y) - dist(c.x, c.y, b.x, b.y));
+  // A human going up for the ball gets the first shot at it, ahead of CPU teammates.
+  const ui = defs.findIndex((d) => userPlaying(d));
+  if (ui > 0) defs.unshift(defs.splice(ui, 1)[0]);
   // How tightly is the receiver covered?
   let contest = 0;
   if (recIn) for (const d of defs) {
@@ -449,17 +459,23 @@ export function resolveCatch(sim, undercutter) {
     const dd = dist(d.x, d.y, b.x, b.y);
     const better = !recIn || dd < recD - 0.3 || d === undercutter;
     const uc = d.user ? sim.ctl(d.team) : null;
-    const playBall = uc && (uc.held.has('catch_aggr') || uc.pressed.has('catch_aggr'));
+    const playBall = userPlaying(d);
     const swat = uc && (uc.held.has('swat') || uc.pressed.has('swat'));
     if (!better && !playBall && !swat) continue;
     const prox = clamp(1.15 - dd * 0.5, 0.25, 1.1);
     let pInt = (0.035 + (d.r.cth ?? 50) * 0.0026) * typeK * prox * (better ? 1 : 0.45);
     let pDef = (0.38 + Math.max(d.r.mcv ?? 50, d.r.zcv ?? 50) * 0.002) * prox * (better ? 1 : 0.6);
     if (d === undercutter) pInt *= 0.8;
-    if (playBall) { pInt *= 1.5; pDef *= 0.85; }
+    if (playBall && d.user) {
+      // User pick: in front of the receiver with good timing it's a real chance at the ball.
+      const timing = d.playBallT !== undefined && sim.t - d.playBallT < 0.6 ? 1.12 : 1.0;
+      const base = better ? 0.26 + (d.r.cth ?? 50) * 0.0036 + ((d.r.awr ?? 60) - 60) * 0.002 : 0.1 + (d.r.cth ?? 50) * 0.0015;
+      pInt = clamp(base * typeK * timing * clamp(1.25 - dd * 0.25, 0.5, 1.1) * [1.15, 1.0, 0.85, 0.7][sim.difficulty ?? 1], 0.04, 0.78);
+      pDef = clamp(0.38 + Math.max(d.r.mcv ?? 50, d.r.zcv ?? 50) * 0.002, 0, 0.8);
+    } else if (playBall) { pInt *= 1.5; pDef *= 0.85; }
     if (swat) { pInt *= 0.4; pDef *= 1.35; }
     if (sim.isUser(sim.offIdx) && !d.user) pInt *= [0.5, 0.8, 1.0, 1.15][sim.difficulty];
-    if (sim.rng.chance(clamp(pInt, 0, 0.6))) return intercept(sim, d);
+    if (sim.rng.chance(clamp(pInt, 0, d.user ? 0.8 : 0.6))) return intercept(sim, d);
     if (sim.rng.chance(clamp(pDef, 0, 0.85))) return incompletion(sim, 'defended', d);
     break; // only the best-positioned defender gets a clean shot at the ball
   }

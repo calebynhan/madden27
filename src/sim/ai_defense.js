@@ -85,7 +85,7 @@ export function updateDefense(sim, d, dt) {
     const pa = sim.playAction;
     const biteT = d.readT + 0.35 + (99 - (d.r.prc ?? 60)) * 0.014;
     const manOnWR = t.kind === 'man' && t.target && t.target.pos !== 'RB' && t.target.pos !== 'FB' && t.target.task?.kind === 'route';
-    if (sim.t < d.readT) { d.stop(); d.anim = 'shuffle'; return; }
+    if (sim.t < d.readT) { d.stop(); d.anim = 'stance2'; eyesOnQB(sim, d); return; }
     // RPO: a defender responsible for the read receiver stays honest until the handoff.
     if (rpoHonest(sim, t)) return execTask(sim, d, dt);
     if (!manOnWR && (designedRun || (pa && sim.t < biteT))) {
@@ -101,6 +101,7 @@ export function updateDefense(sim, d, dt) {
       const p = sim.field(Math.max(TUNE.lbFillDepth, df.f - 0.9), df.l + clamp(trackL - df.l, -4, 4) * 0.8);
       d.seek(p.x, p.y, 0.8, 0.6);
       d.anim = 'shuffle';
+      d.faceTo = Math.atan2(back.y - d.y, back.x - d.x); // keyed on the back
       return;
     }
   }
@@ -118,6 +119,7 @@ export function updateDefense(sim, d, dt) {
       const p = sim.field(df.f + 0.6, df.l);
       d.seek(p.x, p.y, 0.3, 0.4);
       d.anim = 'backpedal';
+      eyesOnQB(sim, d);
       return;
     }
     if (designedRun || (pa && sim.t < biteT)) {
@@ -169,13 +171,28 @@ function rpoHonest(sim, t) {
   return false;
 }
 
+// Coverage footwork: backpedal or shuffle facing the QB; open the hips and run only when
+// he has to cover ground away from the QB at speed.
+function eyesOnQB(sim, d) {
+  if (sim.thrown || !sim.qb || !sim.qb.isActive()) return;
+  const qb = sim.carrier && sim.carrier.team !== d.team ? sim.carrier : sim.qb;
+  const toQB = Math.atan2(qb.y - d.y, qb.x - d.x);
+  const sp = d.speed;
+  if (sp < 0.6) { d.faceTo = toQB; return; }
+  let diff = Math.abs(Math.atan2(d.vy, d.vx) - toQB);
+  if (diff > Math.PI) diff = Math.PI * 2 - diff;
+  if (sp > 5.6 && diff > 1.9) return;
+  d.faceTo = toQB;
+  d.anim = diff > 2.1 ? 'backpedal' : diff > 0.9 ? 'shuffle' : 'run';
+}
+
 function execTask(sim, d, dt) {
   const t = d.task;
   switch (t.kind) {
     case 'rush': return passRush(sim, d, dt, t.lane === 'contain');
     case 'blitz': return blitz(sim, d, dt);
-    case 'man': return manCover(sim, d, dt);
-    case 'zone': return zoneCover(sim, d, dt);
+    case 'man': manCover(sim, d, dt); return eyesOnQB(sim, d);
+    case 'zone': zoneCover(sim, d, dt); return eyesOnQB(sim, d);
     case 'spy': return spy(sim, d, dt);
     default: d.stop();
   }

@@ -8,6 +8,8 @@ import { offenseSVG, defenseSVG } from './playart.js';
 import { formatClock, ordinal, clamp } from '../core/util.js';
 import { DIFFICULTIES } from '../core/constants.js';
 import { refreshIcons } from '../sim/ai_offense.js';
+import { evalTarget } from '../sim/passing.js';
+import { BULLET_HOLD } from '../sim/user.js';
 import { cyclePresnapDefender } from '../sim/user.js';
 import * as AI from '../sim/playcaller.js';
 
@@ -153,10 +155,10 @@ export class UI {
     const sec = (title, rows) => `<div><h3>${title}</h3>${rows.map(([a, k]) => `<div class="c"><span>${a}</span><span>${k}</span></div>`).join('')}</div>`;
     c.innerHTML =
       sec('Pre-snap (offense)', [['Snap ball', 'Space · A'], ['Hot route', 'H · Y'], ['Motion', 'M · LB'], ['Audible / flip', 'B · X'], ['Hard count', 'K'], ['Pass protection slide', 'L'], ['Show / hide play art', 'I · LT'], ['Timeout', 'T · Back'], ['Pause', 'Esc · Start']]) +
-      sec('Passing', [['Throw to receiver', '1–5 · A B X Y RB'], ['Lob / touch / bullet', 'tap / medium / hold'], ['Lead the pass', 'hold a direction while releasing'], ['Throw it away', 'X'], ['Scramble', 'move with WASD / stick'], ['Aggressive catch (traffic)', 'R · Y (hold)'], ['Possession catch (sideline)', 'C · A (hold)'], ['Run-after-catch (in stride)', 'E · X (hold)']]) +
+      sec('Passing', [['Throw to receiver', '1–5 · A B X Y RB'], ['Pass type', 'tap = the right pass for the throw, hold = bullet'], ['Lob', 'Shift + number · LT + button'], ['Lead the pass', 'hold a direction while releasing'], ['Throw it away', 'X'], ['Scramble', 'move with WASD / stick'], ['Aggressive catch (traffic)', 'R · Y (hold)'], ['Possession catch (sideline)', 'C · A (hold)'], ['Run-after-catch (in stride)', 'E · X (hold)']]) +
       sec('Ball carrier', [['Move', 'WASD / Arrows · Left stick'], ['Sprint', 'Shift · RT'], ['Juke left / right', 'Q / E · Right stick ←/→'], ['Spin', 'R · B'], ['Stiff arm', 'F · A'], ['Truck', 'C · Right stick ↑'], ['Hurdle', 'V · Y'], ['Stutter step', 'X · Right stick ↓'], ['Dive / QB slide', 'Z · X'], ['Protect ball (hold)', 'G · RB']]) +
       sec('Option &amp; RPO', [['Zone read: keep it', 'move the stick at the mesh'], ['Speed option: pitch', 'X · LB'], ['RPO: pull and throw', 'read receiver\'s button before the handoff']]) +
-      sec('Defense', [['Switch player', 'Tab · B'], ['Dive tackle', 'Space · X'], ['Hit stick', 'F · Right stick ↑'], ['Strip ball', 'Q · RB'], ['Swat ball', 'E · X (ball in air)'], ['Play the ball (INT)', 'R · Y'], ['DL swim / bull rush', 'E / R · A / X'], ['Audible coverage', 'B · X (pre-snap)'], ['Assign defender (blitz, spy, zone, man)', 'H · Y (pre-snap)'], ['Coverage adjustments (shade, press, show blitz)', 'N · RB (pre-snap)'], ['Shift D-line', 'J · LB (pre-snap)']]) +
+      sec('Defense', [['Switch to defender nearest the ball', 'Tab · B'], ['Strafe (face the QB while moving)', 'hold C · hold LT'], ['Play the ball / interception', 'hold R · hold Y while the pass is in the air'], ['Dive tackle', 'Space · X'], ['Hit stick', 'F · Right stick ↑'], ['Strip ball', 'Q · RB'], ['Swat ball', 'E · X (ball in air)'], ['DL swim / bull rush', 'E / R · A / X'], ['Audible coverage', 'B · X (pre-snap)'], ['Assign defender (blitz, spy, zone, man)', 'H · Y (pre-snap)'], ['Coverage adjustments (shade, press, show blitz)', 'N · RB (pre-snap)'], ['Shift D-line', 'J · LB (pre-snap)']]) +
       sec('Special teams', [['Aim kick', '← → / Left stick'], ['Start / set power / accuracy', 'Space · A (3 presses)'], ['Fair catch (returner)', 'F'], ['Kneel in end zone', 'Z']]) +
       sec('Other', [['Instant replay (after play)', 'Y'], ['Skip post-play', 'Space · A'], ['Camera', 'Settings → Camera'], ['Replay: scrub / rotate', '← → / Q E'], ['Replay: play / pause', 'Space']]);
     el.appendChild(c);
@@ -182,6 +184,7 @@ export class UI {
       ['Auto sprint', 'autoSprint', [false, true], (v) => (v ? 'On' : 'Off')],
       ['Announcer voice', 'announcer', [true, false], (v) => (v ? 'On' : 'Off')],
       ['Coach mode (call plays, CPU plays them)', 'coachMode', [false, true], (v) => (v ? 'On' : 'Off')],
+      ['Pass assist (open receivers glow)', 'passAssist', [true, false], (v) => (v ? 'On' : 'Off')],
       ['Play art pre-snap', 'showArt', [true, false], (v) => (v ? 'On' : 'Off')],
       ['Default difficulty', 'difficulty', [0, 1, 2, 3], (v) => DIFFICULTIES[v]],
       ['Default quarter length', 'quarterLen', [1, 2, 3, 4, 5, 6, 8, 10, 12, 15], (v) => `${v} min`],
@@ -893,10 +896,12 @@ export class UI {
       if (u && u === sim.qb && sim.run && sim.run.optionLive && u.hasBall) html = `<div>${k('X', 'LB')} Pitch to the back · steer to keep it</div>`;
       else if (u && u === sim.qb && sim.rpo && sim.run && !sim.run.handoffDone && !sim.thrown && !sim.pendingThrow) html = `<div>RPO: ${k(String((sim.icons || []).findIndex((e) => e.tag === sim.rpo.tag) + 1), 'A')} Pull and throw · otherwise it's a handoff</div>`;
       else if (u && u === sim.qb && sim.run && sim.run.scheme === 'read' && !sim.run.handoffDone && !u.qbRunner) html = `<div>Zone read: move the stick at the mesh to keep it</div>`;
-      else if (u && u.hasBall && u === sim.qb && !sim.thrown && sim.playType !== 'run' && !u.qbRunner) html = `<div>${k('1-5', 'A B X Y RB')} Throw (tap=lob · hold=bullet)</div><div>${k('X', 'LB')} Throw away · move to scramble</div>`;
+      else if (u && u.hasBall && u === sim.qb && !sim.thrown && sim.playType !== 'run' && !u.qbRunner) html = `<div>${k('1-5', 'A B X Y RB')} Throw to that receiver — tap for a normal pass, hold for a bullet</div><div>${k('Shift', 'LT')} + receiver = lob · ${k('X', 'LB')} Throw away · move to scramble</div>`;
       else if (u && u.hasBall) html = `<div>${k('Q/E', 'RS ←→')} Juke ${k('R', 'B')} Spin ${k('F', 'A')} Stiff arm</div><div>${k('C', 'RS ↑')} Truck ${k('V', 'Y')} Hurdle ${k('Z', 'X')} Dive ${k('Shift', 'RT')} Sprint</div>`;
       else if (u && u.team === sim.offIdx && sim.thrown && sim.ball.state === 'air' && sim.target === u) html = `<div>Hold to catch: ${k('R', 'Y')} Aggressive ${k('C', 'A')} Possession ${k('E', 'X')} Run after catch</div>`;
-      else if (u && u.team !== sim.possession) html = `<div>${k('Tab', 'B')} Switch ${k('Space', 'X')} Dive tackle ${k('F', 'RS ↑')} Hit stick</div><div>${k('Q', 'RB')} Strip ${k('E', 'X')} Swat ${k('R', 'Y')} Play ball</div>`;
+      else if (u && u.team !== sim.possession) html = sim.thrown && sim.ball.state === 'air'
+        ? `<div>Ball in the air: hold ${k('R', 'Y')} to go get it (interception) · ${k('E', 'X')} Swat it down</div><div>${k('Tab', 'B')} Switch to the defender nearest the ball</div>`
+        : `<div>${k('Tab', 'B')} Switch ${k('C', 'LT')} Strafe (hold) ${k('Space', 'X')} Dive tackle ${k('F', 'RS ↑')} Hit stick</div><div>${k('R', 'Y')} Play the ball ${k('E', 'X')} Swat ${k('Q', 'RB')} Strip</div>`;
     } else if (g.phase === 'post') html = `<div>${k('Y', 'Y')} Instant replay · ${k('Space', 'A')} Continue</div>`;
     if (html !== this.hintKey) { this.hintKey = html; L.hints.innerHTML = html; }
     L.hints.classList.toggle('hidden', !html || !!app.view.replay);
@@ -922,13 +927,24 @@ export class UI {
       if (offUser && qbHas && (sim.playType !== 'run' || rpoLive) && sim.icons) {
         const src = this.app.humans[sim.offIdx];
         const pad = src && src.kind === 'gamepad';
+        // Pass assist: open receivers glow, covered ones fade (Settings → Pass assist).
+        const assist = this.app.settings.passAssist !== false && g.phase === 'live' && sim.qb.hasBall;
+        const now = performance.now();
+        if (assist && (!this.openT || now - this.openT > 120 || this.openSim !== sim)) {
+          this.openT = now; this.openSim = sim;
+          this.openCache = sim.icons.map((e) => { if (!e.task || e.task.kind !== 'route') return null; const ev = evalTarget(sim, sim.qb, e); return ev ? ev.margin : -9; });
+        }
+        const devs = this.app.devicesFor(sim.offIdx);
         sim.icons.forEach((e, i) => {
           if (sim.playType === 'run' && e.tag !== sim.rpo.tag) return; // RPO: only the read receiver
           const p = r.project(e.x, e.y, 2.7);
           if (!p.visible) return;
           const lbl = pad ? PAD_GLYPH['pass' + (i + 1)] : String(i + 1);
           const blocking = e.task && (e.task.kind === 'passblock');
-          html += `<div class="ricon c${i + 1} ${blocking ? 'dim' : ''}" style="left:${p.x}px;top:${p.y}px">${lbl}</div>`;
+          const m = assist && this.openCache ? this.openCache[i] : null;
+          const st = m === null || m === undefined ? '' : m > 0.4 ? 'open' : m < -0.05 ? 'covered' : '';
+          const held = devs.some((d) => d.held.has('pass' + (i + 1)));
+          html += `<div class="ricon c${i + 1} ${blocking ? 'dim' : ''} ${st} ${held ? 'held' : ''}" style="left:${p.x}px;top:${p.y}px">${lbl}</div>`;
         });
       }
       // Name tags for controlled players
@@ -946,7 +962,14 @@ export class UI {
     const devs = sim && g.isUser(sim.offIdx) ? this.app.devicesFor(sim.offIdx) : [];
     let hold = 0;
     if (devs.length && g.phase === 'live' && sim.qb && sim.qb.hasBall && !sim.thrown) for (const src of devs) for (let i = 1; i <= 5; i++) hold = Math.max(hold, src.holdTime('pass' + i, performance.now()));
-    if (hold > 0.04) { L.passmeter.classList.remove('hidden'); L.passmeter.querySelector('i').style.width = `${Math.min(100, (hold / 0.45) * 100)}%`; }
+    if (hold > 0.04) {
+      L.passmeter.classList.remove('hidden');
+      const lob = devs.some((d) => d.held.has('lobmod'));
+      L.passmeter.querySelector('i').style.width = `${Math.min(100, (hold / BULLET_HOLD) * 100)}%`;
+      const lbl = lob ? 'LOB' : hold >= BULLET_HOLD ? 'BULLET' : 'TOUCH — keep holding for a bullet';
+      const sp = L.passmeter.querySelector('span');
+      if (sp.textContent !== lbl) sp.textContent = lbl;
+    }
     else L.passmeter.classList.add('hidden');
   }
 
