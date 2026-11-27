@@ -2,6 +2,7 @@
 // front, side and back (used by tools/viewer/shoot.cjs to screenshot the asset as it's built).
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 
@@ -39,7 +40,7 @@ const cam = new THREE.PerspectiveCamera(26, W / H, 0.05, 100);
 const COLORS = { jersey: 0x1d3f9e, pants: 0xe9e7df, socks: 0x1d3f9e, shoes: 0x111111, gloves: 0xf2f2f2, arms: 0x8d5524, skin: 0x8d5524, belt: 0x111111, helmet: 0x1d3f9e, mask: 0xd8d8d8, stripe: 0xf2c230, decal: 0xf2c230, eyes: 0x1a1110, visor: 0x222222 };
 window.loadModel = (b64, opts = {}) => new Promise((resolve, reject) => {
   const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  new GLTFLoader().parse(bin.buffer, '', (gltf) => {
+  new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parse(bin.buffer, '', (gltf) => {
     const info = { meshes: 0, tris: 0, materials: new Set(), skinned: 0, morphs: 0, colors: false };
     gltf.scene.traverse((o) => { if (o.isMesh) o.userData.matName = (o.material && o.material.name) || ''; });
     // Each variant: { yaw, heavy, lean, x }
@@ -71,6 +72,9 @@ window.loadModel = (b64, opts = {}) => new Promise((resolve, reject) => {
           if (name === 'helmetpad') mat.color.set(0x222222);
           if (name === 'strap') mat.color.set(0xeeeeee);
           if (o.geometry.attributes.color && opts.ao !== false) mat.vertexColors = true;
+          // the baked detail map (second UV set) on the body, as the game uses it
+          const nm = o.material && o.material.normalMap;
+          if (nm && opts.normal !== false && o.geometry.attributes.uv1) { nm.channel = 1; mat.normalMap = nm; mat.normalScale.copy(o.material.normalScale); }
           o.material = mat;
         }
       });

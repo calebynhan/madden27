@@ -1,7 +1,7 @@
 // Procedural, articulated football player model with code-driven animation.
 // Poses are flat vectors so state changes can crossfade smoothly.
 import * as THREE from 'three';
-import { athleteTemplate, makeAthlete, jerseyAtlas, pantsAtlas, tvNumberTexture, skinMaterial } from './athlete.js';
+import { athleteTemplate, makeAthlete, jerseyAtlas, pantsAtlas, tvNumberTexture, skinMaterial, applyDetail } from './athlete.js';
 import MOCAP from '../data/mocap.json';
 
 const SKIN = [0x8d5524, 0xc68642, 0xe0ac69, 0xf1c27d, 0x6b3f1f, 0xa0663a, 0x4a2a12];
@@ -139,7 +139,8 @@ export class TeamLook {
     this.shoulderMats = new Map();
   }
   // Materials for the skinned athlete (vertex colors carry its baked occlusion, so these are
-  // separate from the primitive model's materials).
+  // separate from the primitive model's materials). The body's materials also take the model's
+  // baked detail normal map (applyDetail); the jersey and pants add the knit weave on top.
   athleteMats(num, opts = {}) {
     if (!this.am) {
       const t = this.team, home = this.home;
@@ -147,12 +148,12 @@ export class TeamLook {
       const decal = decalTexture(t, 128);
       decal.flipY = false; // glTF texture coordinates run top-down
       this.am = {
-        pants: new THREE.MeshStandardMaterial({ ...vc, map: pantsAtlas(t, home), roughness: 0.5, normalMap: this.knit, normalScale: new THREE.Vector2(0.12, 0.12) }),
-        belt: new THREE.MeshStandardMaterial({ ...vc, color: home ? 0x161616 : t.secondary, roughness: 0.55 }),
-        socks: new THREE.MeshStandardMaterial({ ...vc, color: home ? t.primary : t.secondary, roughness: 0.85, normalMap: this.knit, normalScale: new THREE.Vector2(0.2, 0.2) }),
-        shoes: new THREE.MeshStandardMaterial({ ...vc, color: home ? 0x141414 : 0xf0f0f0, roughness: 0.35, metalness: 0.05 }),
-        gloves: new THREE.MeshStandardMaterial({ ...vc, color: home ? t.secondary : t.primary, roughness: 0.5 }),
-        compression: new THREE.MeshStandardMaterial({ ...vc, color: home ? 0x161616 : t.primary, roughness: 0.6 }),
+        pants: applyDetail(new THREE.MeshStandardMaterial({ ...vc, map: pantsAtlas(t, home), roughness: 0.5 }), { knit: this.knit, knitScale: 0.12 }),
+        belt: applyDetail(new THREE.MeshStandardMaterial({ ...vc, color: home ? 0x161616 : t.secondary, roughness: 0.55 })),
+        socks: applyDetail(new THREE.MeshStandardMaterial({ ...vc, color: home ? t.primary : t.secondary, roughness: 0.85 }), { knit: this.knit, knitScale: 0.2 }),
+        shoes: applyDetail(new THREE.MeshStandardMaterial({ ...vc, color: home ? 0x141414 : 0xf0f0f0, roughness: 0.35, metalness: 0.05 })),
+        gloves: applyDetail(new THREE.MeshStandardMaterial({ ...vc, color: home ? t.secondary : t.primary, roughness: 0.5 })),
+        compression: applyDetail(new THREE.MeshStandardMaterial({ ...vc, color: home ? 0x161616 : t.primary, roughness: 0.6 })),
         helmet: new THREE.MeshPhysicalMaterial({ ...vc, color: t.primary, roughness: 0.3, metalness: 0.15, clearcoat: 1, clearcoatRoughness: 0.05 }),
         helmetpad: new THREE.MeshStandardMaterial({ ...vc, color: 0x1b1c1f, roughness: 0.85 }),
         stripe: new THREE.MeshPhysicalMaterial({ ...vc, color: t.secondary, roughness: 0.33, clearcoat: 1, clearcoatRoughness: 0.07 }),
@@ -166,7 +167,7 @@ export class TeamLook {
       this.tvMats = new Map();
     }
     if (!this.jerseyAtlasMats.has(num)) {
-      this.jerseyAtlasMats.set(num, new THREE.MeshStandardMaterial({ vertexColors: true, map: jerseyAtlas(this.team, num, this.home), roughness: 0.72, normalMap: this.knit, normalScale: new THREE.Vector2(0.25, 0.25) }));
+      this.jerseyAtlasMats.set(num, applyDetail(new THREE.MeshStandardMaterial({ vertexColors: true, map: jerseyAtlas(this.team, num, this.home), roughness: 0.72 }), { knit: this.knit, knitScale: 0.25 }));
     }
     const skin = skinMaterial(opts.skin ?? 0);
     return { ...this.am, jersey: this.jerseyAtlasMats.get(num), skin, arms: opts.sleeves ? this.am.compression : skin };
@@ -264,7 +265,7 @@ export class PlayerModel {
     for (const s of [-1, 1]) {
       const holder = new THREE.Group();
       holder.position.set(s * tpl.padX * (1 + 0.18 * heavy - 0.07 * lean), tpl.padY - B.torso.position.y - B.hips.position.y + 0.004, -0.012);
-      holder.rotation.z = -s * 0.22;
+      holder.rotation.z = -s * tpl.padTilt;
       const tv = new THREE.Mesh(TV_GEO, look.tvMat(num));
       tv.rotation.set(-Math.PI / 2, 0, Math.PI);
       holder.add(tv);

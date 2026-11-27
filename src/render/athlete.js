@@ -1,11 +1,14 @@
 // Skinned player model built in Blender (tools/blender/player.py -> assets/player.glb).
 // The GLB holds the body, uniform zones, helmet and facemask as one skinned mesh split into
-// per-zone primitives, plus "heavy"/"lean" body shapes (morph targets) and baked ambient
-// occlusion (vertex colors). Its skeleton is rebuilt here with identity rest rotations at the
-// same joints the procedural animation drives, so every pose channel applies exactly as on
-// the old rig. Geometry is shared by every player; each one gets its own bones and materials.
+// per-zone primitives, plus "heavy"/"lean" body shapes (morph targets), baked ambient
+// occlusion (vertex colors) and a baked normal map of the sculpted detail (fabric folds, seams,
+// pad outlines, muscle definition) on a second UV set. Its skeleton is rebuilt here with
+// identity rest rotations at the same joints the procedural animation drives, so every pose
+// channel applies exactly as on the old rig. Geometry is shared by every player; each one gets
+// its own bones and materials.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import glb from '../../assets/player.glb';
 
 let template = null;
@@ -13,7 +16,8 @@ let template = null;
 export const athleteReady = new Promise((resolve) => {
   try {
     const buf = glb.buffer.slice(glb.byteOffset, glb.byteOffset + glb.byteLength);
-    new GLTFLoader().parse(buf, '', (gltf) => {
+    // The model's buffers are meshopt-compressed (EXT_meshopt_compression)
+    new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parse(buf, '', (gltf) => {
       try { template = buildTemplate(gltf); } catch (e) { console.warn('player model unusable:', e); template = null; }
       resolve(template);
     }, (err) => { console.warn('player model failed to load:', err); resolve(null); });
@@ -29,8 +33,11 @@ function buildTemplate(gltf) {
   gltf.scene.updateMatrixWorld(true);
   const parts = [];
   let joints = null;
+  let normalMap = null;
   gltf.scene.traverse((o) => {
     if (!o.isSkinnedMesh) return;
+    // The baked detail map (one texture shared by the body materials, on the second UV set)
+    if (!normalMap && o.material && o.material.normalMap && o.geometry.attributes.uv1) normalMap = o.material.normalMap;
     let geo = o.geometry;
     if (!o.matrixWorld.equals(new THREE.Matrix4())) { geo = geo.clone(); geo.applyMatrix4(o.matrixWorld); }
     geo.computeBoundingSphere();
@@ -46,17 +53,61 @@ function buildTemplate(gltf) {
   if (!parts.length || !joints) throw new Error('no skinned mesh in player.glb');
   const need = ['root', 'hips', 'torso', 'head', 'shoulder_R', 'elbow_R', 'hand_R', 'shoulder_L', 'elbow_L', 'hand_L', 'thigh_R', 'knee_R', 'thigh_L', 'knee_L'];
   for (const n of need) if (!joints.some((j) => j.name === n)) throw new Error(`player.glb is missing joint ${n}`);
-  // Height of the shoulder-pad tops (where the shoulder numbers sit): cast a ray down onto
-  // the jersey at the pad's crown.
+  // Height and slope of the shoulder-pad tops (where the shoulder numbers sit): cast rays down
+  // onto the jersey at the pad's crown and a little to either side of it.
   const jersey = parts.find((p) => p.name === 'jersey');
-  let padY = 1.72;
   const padX = 0.25;
+  let padY = 1.72, padTilt = 0.22;
   if (jersey) {
     const probe = new THREE.Mesh(jersey.geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
-    const hit = new THREE.Raycaster(new THREE.Vector3(padX, 3, -0.012), new THREE.Vector3(0, -1, 0)).intersectObject(probe)[0];
-    if (hit) padY = hit.point.y;
+    const rc = new THREE.Raycaster();
+    const yAt = (x) => {
+      rc.set(new THREE.Vector3(x, 3, -0.012), new THREE.Vector3(0, -1, 0));
+      const hit = rc.intersectObject(probe)[0];
+      return hit ? hit.point.y : null;
+    };
+    const y0 = yAt(padX), yIn = yAt(padX - 0.05), yOut = yAt(padX + 0.05);
+    if (y0 !== null) padY = y0;
+    if (yIn !== null && yOut !== null) padTilt = Math.atan2(yIn - yOut, 0.1);
   }
-  return { parts, joints, padX, padY };
+  if (normalMap) {
+    normalMap.anisotropy = 4;
+    normalMap.channel = 1;
+  }
+  // With the model's own tangents the map applies as baked; without them three.js derives a
+  // frame from screen-space derivatives, which needs the green channel flipped (as GLTFLoader does)
+  const tangents = parts.every((p) => !!p.geometry.attributes.tangent);
+  return { parts, joints, padX, padY, padTilt, normalMap, tangents };
+}
+
+// Give a body material the baked detail normal map (folds, seams, pad outlines, muscles). With a
+// knit texture, its fine tiled weave (sampled on the uniform's own UVs, so the material needs a
+// map) is added on top in the shader, since three.js takes one normal map per material.
+// Without a baked map in the model the knit alone stays the normal map, as before.
+const KNIT_PARS = 'uniform sampler2D knitMap;\nuniform vec2 knitRepeat;\nuniform float knitScale;\n';
+const KNIT_ADD = 'mapN.xy *= normalScale;\n\tmapN.xy += ( texture2D( knitMap, vMapUv * knitRepeat ).xy * 2.0 - 1.0 ) * knitScale;';
+export function applyDetail(mat, { strength = 1, knit = null, knitScale = 0.2 } = {}) {
+  const nm = template && template.normalMap;
+  if (!nm) {
+    if (knit) { mat.normalMap = knit; mat.normalScale = new THREE.Vector2(knitScale, knitScale); }
+    return mat;
+  }
+  mat.normalMap = nm;
+  mat.normalScale = new THREE.Vector2(strength, template.tangents ? strength : -strength);
+  if (knit && mat.map) {
+    const repeat = knit.repeat.clone();
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.knitMap = { value: knit };
+      shader.uniforms.knitRepeat = { value: repeat };
+      shader.uniforms.knitScale = { value: knitScale };
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <normalmap_pars_fragment>', '#include <normalmap_pars_fragment>\n' + KNIT_PARS)
+        .replace('mapN.xy *= normalScale;', KNIT_ADD);
+    };
+    mat.customProgramCacheKey = () => 'athlete-knit';
+  }
+  mat.needsUpdate = true;
+  return mat;
 }
 
 // Small or interior parts that would only add cost to the shadow pass
@@ -201,9 +252,10 @@ export function tvNumberTexture(team, num, home) {
 
 const SKIN_TONES = [0x8d5524, 0xc68642, 0xe0ac69, 0xf1c27d, 0x6b3f1f, 0xa0663a, 0x4a2a12];
 const skinMats = new Map();
-// Skin with a touch of sheen; vertex colors carry the baked occlusion.
+// Skin with a touch of sheen; vertex colors carry the baked occlusion and the detail map the
+// muscle definition (created only once the model has loaded, from the skinned players).
 export function skinMaterial(i) {
   const k = ((i % SKIN_TONES.length) + SKIN_TONES.length) % SKIN_TONES.length;
-  if (!skinMats.has(k)) skinMats.set(k, new THREE.MeshPhysicalMaterial({ color: SKIN_TONES[k], roughness: 0.55, sheen: 0.4, sheenRoughness: 0.6, sheenColor: new THREE.Color(0x553322), vertexColors: true }));
+  if (!skinMats.has(k)) skinMats.set(k, applyDetail(new THREE.MeshPhysicalMaterial({ color: SKIN_TONES[k], roughness: 0.55, sheen: 0.4, sheenRoughness: 0.6, sheenColor: new THREE.Color(0x553322), vertexColors: true })));
   return skinMats.get(k);
 }
