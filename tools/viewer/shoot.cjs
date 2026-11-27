@@ -4,7 +4,7 @@ const fs = require('fs'), path = require('path');
 const { execSync } = require('child_process');
 (async () => {
   const [glb, out, optStr] = process.argv.slice(2);
-  const dir = path.dirname(out);
+  const dir = path.dirname(path.resolve(out));
   const html = path.join(dir, 'viewer.html'), js = path.join(dir, 'viewer.js');
   execSync(`npx esbuild ${path.resolve(__dirname, 'view.js')} --bundle --format=iife --outfile=${js} --log-level=error`, { cwd: path.resolve(__dirname, '../..') });
   fs.writeFileSync(html, `<!doctype html><html><body><script src="viewer.js"></script></body></html>`);
