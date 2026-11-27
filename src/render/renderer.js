@@ -101,8 +101,50 @@ export class Renderer {
     this.camMode = settings.camera || 'standard';
     this.resize();
     window.addEventListener('resize', () => this.resize());
-    // Players made before the Blender-built model finished loading get rebuilt with it
-    athleteReady.then((t) => { if (t) this.resetModels(); });
+    // Players made before the Blender-built model finished loading get rebuilt with it, once
+    // its shaders are compiled
+    athleteReady.then(async (t) => {
+      if (!t) return;
+      try { await this.warmAthletes(); } catch (e) { console.warn('athlete shader warm-up failed:', e); }
+      this.resetModels();
+    });
+  }
+
+  // Compile the skinned athletes' shaders one program per frame before any player switches to
+  // the Blender-built model: a software renderer can take seconds per program, and compiling
+  // them all in one frame stalls the page (on a GPU this just avoids a hitch). The sample models
+  // keep private copies of their materials and are never drawn or disposed, so the programs
+  // stay cached while games (which dispose their players' materials) come and go.
+  async warmAthletes() {
+    const looks = this.looks.filter(Boolean);
+    if (!looks.length || this.athleteSamples) return;
+    const holder = new THREE.Scene();
+    const meshes = [];
+    for (const look of looks) {
+      for (const opts of [{ sleeves: false, visor: true, skin: 1 }, { sleeves: true, skin: 4 }]) {
+        const m = new PlayerModel(look, 88, opts);
+        holder.add(m.root);
+        m.root.traverse((o) => {
+          if (!o.isMesh) return;
+          const c = o.material.clone();
+          c.onBeforeCompile = o.material.onBeforeCompile;
+          c.customProgramCacheKey = o.material.customProgramCacheKey;
+          o.material = c;
+          meshes.push(o);
+        });
+      }
+    }
+    this.athleteSamples = holder;
+    const gl = this.r.getContext();
+    for (const mesh of meshes) {
+      for (const o of meshes) o.visible = o === mesh;
+      const before = this.r.info.programs.length;
+      this.r.compile(holder, this.camera, this.scene);
+      if (this.r.info.programs.length === before) continue; // its program was already built
+      const prog = this.r.properties.get(mesh.material).currentProgram;
+      if (prog) gl.getProgramParameter(prog.program, gl.LINK_STATUS); // wait for this program only
+      await new Promise((res) => requestAnimationFrame(res));
+    }
   }
 
   resetModels() {
