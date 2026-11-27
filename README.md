@@ -101,12 +101,14 @@ The full list is in **Controls** on the main menu.
   - **Home crowd**: a layered crowd that pulls for the home team. It cheers big plays, groans at turnovers and opponent scores, and boos flags on the home team, with whistles and applause. It quiets down for the home offense and gets loud for third downs on defense, with a "de-fense" chant and claps.
 - **Motion capture** (`tools/mocap/convert.mjs` → `src/data/mocap.json`): running at every speed, the backpedal, defensive slides and idle standing come from real motion capture. The converter retargets clips from the CMU Graphics Lab Motion Capture Database onto the game's rig by matching limb directions. Strides are cut into seamless loops, and their rate follows the player's speed. Ball-carry arms, leaning into cuts, stances and throws stay hand-tuned on top.
 - **Passing help**: a human QB gets the best open receiver highlighted, weighted toward a gain and the sticks, and switched to the quick throw when a free rusher is coming. Receivers work back to the ball on your throws until you steer them yourself. On the easier levels the pocket holds a beat longer and blitzes arrive a beat later.
-- **Players** (`tools/blender/player.py` → `assets/player.glb`, `src/render/athlete.js`): every player is a skinned 3D athlete built procedurally in Blender. It's an original design with no scanned or downloaded models. The script works in five steps:
-  - Overlapping body volumes are fused with a voxel remesh, smoothed and retopologized into clean quads.
-  - The uniform is cut into zones along straight lines (jersey, belt, pants with knee pads, socks, cleats, gloves, skin) and UV-mapped, so team colors, numbers, collar trim, sleeve stripes and pants stripes are painted per team at runtime.
-  - The body is rigged to the exact joints the game's animation drives, with automatic weights, plus "heavy" and "lean" body shapes so linemen and receivers look different.
+- **Players** (`tools/blender/player.py` → `assets/player.glb`, `src/render/athlete.js`): every player is a skinned 3D athlete built procedurally in Blender. It's an original design with no scanned or downloaded models. The build works in these steps:
+  - The athlete in full pads is described as overlapping volumes with muscle-shaped cross-sections: broad shoulder pads with a raised arch and capped shoulders under the jersey, short tight sleeves, a tapered waist with the jersey bloused over the belt, a thick neck, muscled arms, thighs and calves, thigh and knee pads under the pants, and low-cut cleats. They're fused with a voxel remesh and retopologized into clean quads.
+  - The uniform is cut into zones along straight lines (jersey, belt, pants, socks, cleats, gloves, skin) and UV-mapped, so team colors, numbers, collar trim, sleeve stripes and pants stripes are painted per team at runtime.
+  - A dense copy of the same volumes gets a procedural sculpt (jersey folds where it tucks into the belt and drops off the pads, seams, hems and collar ribbing, thigh and knee pad outlines, folds behind the knees, sock ribbing, laces, glove padding, and muscle definition on the arms and neck). It's baked into a normal map on a second UV set, so the detail costs no triangles.
+  - The body is rigged to the exact joints the game's animation drives, with automatic weights (the shoulder pads ride on the chest, with the caps lifting partly with the arms), plus "heavy" and "lean" body shapes so linemen and receivers look different.
+  - Gloved fingers and thumbs, cleat soles with studs, and the helmet are rigid parts. The helmet has a shell with flared jaw guards, a ridge around the lower back, ear holes with molded rims, a brow bumper, a multi-bar facemask with clips, a four-point chin strap and an optional visor.
   - Ambient occlusion is baked into the vertex colors.
-  - The helmet is built from an actual shell (face opening, jaw flaps, padded rim, center stripe, logo patches, ear holes) with a multi-bar facemask, chin strap and an optional visor.
+  - In the game, the athletes' shaders are compiled one per frame before the players switch over to the model, so the switch doesn't stall the page.
 - **Rendering** (`src/render/`): three.js with image-based lighting from a procedural stadium light probe (glossy clearcoat helmets reflect the stadium), an anti-aliased HDR post chain (bloom, filmic tone mapping, broadcast color grade and vignette), a physically based day sky or a starry night sky, sharp soft shadows plus contact shadows under every player, procedurally painted turf with mowing stripes, wear and a grass-grain normal map, and a full stadium of about 27,000 individually animated fans in team colors, suites, a roof canopy and scrolling LED ribbon boards. Everything is generated in code (no downloaded art) and renders on your own laptop's GPU; **Settings → Graphics** offers Auto (adapts resolution, then effects, to hold a smooth frame rate), Low (no post effects, lighter crowd), Medium and High. The crowd uses a separate shirt mask and alpha-to-coverage so the stands stay team-colored and shimmer-free at broadcast distance.
 
 ### Credits
@@ -115,11 +117,20 @@ Motion capture data comes from the CMU Graphics Lab Motion Capture Database (moc
 
 ### Rebuilding the player model
 
-The model is generated, not hand-made, so it can be rebuilt or restyled from the script. You need Blender 4.x (free).
+The model is generated, not hand-made, so it can be rebuilt or restyled from the script. You need Blender (free). The current model was built with Blender 5.3; the script also handles the older glTF exporter option names of Blender 4.x. The build starts from an empty scene, so run it headless as below, not inside a Blender session you want to keep.
 
 ```bash
 blender -b --factory-startup -P tools/blender/player.py -- assets/player.glb
 ```
+
+It takes under a minute, most of it the high-poly sculpt and the normal-map bake. The steps live in `tools/blender/gp/`: `body.py` (volumes), `uniform.py` (zones and the runtime UV layout), `rig.py` (joints, weights, body shapes), `helmet.py`, `gear.py` (fingers, soles, studs), `detail.py` (the sculpt), `bake.py` and `pipeline.py` (runs them in order, exports, and checks the GLB against what the game needs: the 16 material names, the joints, vertex colors, both morph targets, the second UV set, the normal map, and the triangle budget). Options are environment variables:
+
+- `HD=0` skips the sculpt and the normal map: a quick build in about ten seconds.
+- `SAVE=file.blend` also saves the finished scene as a new .blend to inspect in Blender (it won't overwrite an existing file).
+- `PREVIEW=dir` also renders Workbench previews to `dir` (front, side, three-quarter, back, a close-up, a lineup of the lean, normal and heavy builds, and a far shot from broadcast distance).
+- `FACES` (body quad count), `BAKESIZE` / `SHIPSIZE` (normal map bake and shipped resolution), `IMGFMT` / `IMGQ` (image format and quality inside the GLB) and `MESHOPT=0` (no buffer compression).
+
+The normal map ships inside the GLB as a WebP image on the second UV set (three.js derives the tangent frame per pixel), and the GLB's buffers are meshopt-compressed (`EXT_meshopt_compression`, decoded by three.js's `MeshoptDecoder`), so the file is smaller than the old, simpler model (about 0.6 MB). `athlete.js` reads the map and gives it to the body's materials (the jersey and pants add their tiled knit weave on top in the shader). A model without one still works with the knit alone.
 
 Then preview it the way the game renders it, and rebuild the game:
 
@@ -131,17 +142,19 @@ node tools/viewer/shoot.cjs assets/player.glb preview.png
 npm run build
 ```
 
-To check the model in the game itself (screenshots go to `test/out/`): `poses.cjs` lines players up in chosen animations (`anim:speed[:L|R]`), and `gfxcheck.cjs` takes day and night close-ups.
+To check the model in the game itself (screenshots go to `test/out/`): `poses.cjs` lines players up in chosen animations (`anim:speed[:L|R]`; `POSECAM=dist,height,offset` moves the camera), `gfxcheck.cjs` takes day and night close-ups, `posecheck.cjs` renders players in extreme poses (arms overhead, the throw, a sprint stride, a stance, arms out) through the game's own skeleton code to check the deformation, for any build (`"w": 1.28` heavy, `0.85` lean), and `perf.cjs` compares frame rates of game builds (`PERF_GPU=1` uses this machine's GPU).
 
 ```bash
-node tools/viewer/poses.cjs check run:3,run:9,backpedal:2.5,shuffle:2:R
+node tools/viewer/poses.cjs check run:3,run:9,catch:6,throw,block,stance3,tackle,carry:6
 ```
 
 ```bash
 node tools/viewer/gfxcheck.cjs check
 ```
 
-Setting `HD=1` turns on an unfinished, untested stage in the script: separate gloved fingers, a procedural high-poly sculpt (fabric folds, seams, pad outlines, muscle definition), and Cycles bakes of its normal and ambient-occlusion maps onto a second UV set (`player_normal.png` and `player_ao.png` next to the output). The game doesn't load those maps yet. Without `HD=1` the script builds the model the game ships with.
+```bash
+node tools/viewer/posecheck.cjs test/out/poses.png '{"w":1.28}'
+```
 
 ### Realism check
 
