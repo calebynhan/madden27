@@ -33,11 +33,12 @@ function buildTemplate(gltf) {
   gltf.scene.updateMatrixWorld(true);
   const parts = [];
   let joints = null;
-  let normalMap = null;
+  let normalMap = null, aoMap = null;
   gltf.scene.traverse((o) => {
     if (!o.isSkinnedMesh) return;
-    // The baked detail map (one texture shared by the body materials, on the second UV set)
+    // The baked detail and occlusion maps (shared by the body materials, on the second UV set)
     if (!normalMap && o.material && o.material.normalMap && o.geometry.attributes.uv1) normalMap = o.material.normalMap;
+    if (!aoMap && o.material && o.material.aoMap && o.geometry.attributes.uv1) aoMap = o.material.aoMap;
     let geo = o.geometry;
     if (!o.matrixWorld.equals(new THREE.Matrix4())) { geo = geo.clone(); geo.applyMatrix4(o.matrixWorld); }
     geo.computeBoundingSphere();
@@ -74,19 +75,26 @@ function buildTemplate(gltf) {
     normalMap.anisotropy = 4;
     normalMap.channel = 1;
   }
+  if (aoMap) aoMap.channel = 1;
   // With the model's own tangents the map applies as baked; without them three.js derives a
   // frame from screen-space derivatives, which needs the green channel flipped (as GLTFLoader does)
   const tangents = parts.every((p) => !!p.geometry.attributes.tangent);
-  return { parts, joints, padX, padY, padTilt, normalMap, tangents };
+  return { parts, joints, padX, padY, padTilt, normalMap, aoMap, tangents };
 }
 
-// Give a body material the baked detail normal map (folds, seams, pad outlines, muscles). With a
+// Give a body material the baked detail normal map (folds, seams, pad outlines, muscles) and the
+// baked occlusion of its creases (which shades the stadium's ambient and reflected light). With a
 // knit texture, its fine tiled weave (sampled on the uniform's own UVs, so the material needs a
 // map) is added on top in the shader, since three.js takes one normal map per material.
+// The same shader hook adds a cheap cloth sheen: the diffuse light brightens toward grazing
+// angles (fabric fibres catching light at the silhouette), without a physical material's cost.
 // Without a baked map in the model the knit alone stays the normal map, as before.
-const KNIT_PARS = 'uniform sampler2D knitMap;\nuniform vec2 knitRepeat;\nuniform float knitScale;\n';
+const KNIT_PARS = 'uniform sampler2D knitMap;\nuniform vec2 knitRepeat;\nuniform float knitScale;\nuniform float clothSheen;\n';
 const KNIT_ADD = 'mapN.xy *= normalScale;\n\tmapN.xy += ( texture2D( knitMap, vMapUv * knitRepeat ).xy * 2.0 - 1.0 ) * knitScale;';
-export function applyDetail(mat, { strength = 1, knit = null, knitScale = 0.2 } = {}) {
+const SHEEN_ADD = 'float clothRim = pow( 1.0 - saturate( dot( normal, normalize( vViewPosition ) ) ), 3.0 );\n'
+  + '\toutgoingLight += clothSheen * clothRim * ( reflectedLight.directDiffuse + reflectedLight.indirectDiffuse );\n'
+  + '\t#include <opaque_fragment>';
+export function applyDetail(mat, { strength = 1, knit = null, knitScale = 0.2, sheen = 0 } = {}) {
   const nm = template && template.normalMap;
   if (!nm) {
     if (knit) { mat.normalMap = knit; mat.normalScale = new THREE.Vector2(knitScale, knitScale); }
@@ -94,15 +102,18 @@ export function applyDetail(mat, { strength = 1, knit = null, knitScale = 0.2 } 
   }
   mat.normalMap = nm;
   mat.normalScale = new THREE.Vector2(strength, template.tangents ? strength : -strength);
+  if (template.aoMap) { mat.aoMap = template.aoMap; mat.aoMapIntensity = 1; }
   if (knit && mat.map) {
     const repeat = knit.repeat.clone();
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.knitMap = { value: knit };
       shader.uniforms.knitRepeat = { value: repeat };
       shader.uniforms.knitScale = { value: knitScale };
+      shader.uniforms.clothSheen = { value: sheen };
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <normalmap_pars_fragment>', '#include <normalmap_pars_fragment>\n' + KNIT_PARS)
-        .replace('mapN.xy *= normalScale;', KNIT_ADD);
+        .replace('mapN.xy *= normalScale;', KNIT_ADD)
+        .replace('#include <opaque_fragment>', SHEEN_ADD);
     };
     mat.customProgramCacheKey = () => 'athlete-knit';
   }
@@ -153,7 +164,7 @@ export function makeAthlete(mats, { w = 1, castShadow = true } = {}) {
 // ---------------------------------------------------------------- textures for the new UVs
 // Jersey atlas (matches the Blender UVs): torso band v 0.22-1 (right side u 0, front 0.25,
 // left 0.5, back 0.75), right sleeve v 0-0.1, left sleeve v 0.11-0.21.
-export function jerseyAtlas(team, num, home) {
+export function jerseyAtlas(team, num, home, name = '') {
   // Drawn in a 256-unit space onto a 512 canvas (crisp numbers in close-ups)
   const S = 256, PX = 512;
   const cv = document.createElement('canvas');
@@ -186,6 +197,19 @@ export function jerseyAtlas(team, num, home) {
   for (const [u, v] of [[0.25, 0.6], [0.75, 0.64]]) {
     g.strokeText(txt, u * S, Y(v));
     g.fillText(txt, u * S, Y(v));
+  }
+  // Last name across the upper back, above the number (fit to the nameplate's width)
+  if (name) {
+    const label = name.toUpperCase();
+    let size = 14;
+    g.font = `800 ${size}px "Arial Narrow", "Helvetica Neue", Arial, sans-serif`;
+    if ('letterSpacing' in g) g.letterSpacing = '1px';
+    const maxW = 66;
+    const w = g.measureText(label).width;
+    if (w > maxW) { size = Math.max(9, Math.floor(size * maxW / w)); g.font = `800 ${size}px "Arial Narrow", "Helvetica Neue", Arial, sans-serif`; }
+    g.fillStyle = numFill;
+    g.fillText(label, 0.75 * S, Y(0.81));
+    if ('letterSpacing' in g) g.letterSpacing = '0px';
   }
   // Sleeves: base color with two stripes near the cuff
   for (const [v0, v1] of [[0, 0.1], [0.11, 0.21]]) {
@@ -252,10 +276,10 @@ export function tvNumberTexture(team, num, home) {
 
 const SKIN_TONES = [0x8d5524, 0xc68642, 0xe0ac69, 0xf1c27d, 0x6b3f1f, 0xa0663a, 0x4a2a12];
 const skinMats = new Map();
-// Skin with a touch of sheen; vertex colors carry the baked occlusion and the detail map the
+// Skin: a softer specular than plastic and a warm sheen; vertex colors carry the baked occlusion and the detail map the
 // muscle definition (created only once the model has loaded, from the skinned players).
 export function skinMaterial(i) {
   const k = ((i % SKIN_TONES.length) + SKIN_TONES.length) % SKIN_TONES.length;
-  if (!skinMats.has(k)) skinMats.set(k, applyDetail(new THREE.MeshPhysicalMaterial({ color: SKIN_TONES[k], roughness: 0.55, sheen: 0.4, sheenRoughness: 0.6, sheenColor: new THREE.Color(0x553322), vertexColors: true })));
+  if (!skinMats.has(k)) skinMats.set(k, applyDetail(new THREE.MeshPhysicalMaterial({ color: SKIN_TONES[k], roughness: 0.58, specularIntensity: 0.55, sheen: 0.35, sheenRoughness: 0.55, sheenColor: new THREE.Color(0x6a3a26), vertexColors: true })));
   return skinMats.get(k);
 }

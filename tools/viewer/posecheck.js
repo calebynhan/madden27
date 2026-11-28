@@ -5,6 +5,8 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { athleteReady, makeAthlete, applyDetail } from '../../src/render/athlete.js';
+import { TeamLook } from '../../src/render/player.js';
+import { TEAMS } from '../../src/data/teams.js';
 
 const W = 1600, H = 800;
 const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -34,6 +36,12 @@ const cam = new THREE.PerspectiveCamera(30, W / H, 0.05, 100);
 const COLORS = { jersey: 0x1d3f9e, pants: 0xe9e7df, belt: 0x111111, socks: 0x1d3f9e, shoes: 0x111111, gloves: 0xf2c230, arms: 0x8d5524,
   skin: 0x8d5524, helmet: 0x1d3f9e, helmetpad: 0x222222, stripe: 0xf2c230, decal: 0xf2c230, eyes: 0x1a1110, mask: 0xd8d8d8, strap: 0xeeeeee, visor: 0x222222 };
 const BODY = new Set(['jersey', 'pants', 'belt', 'socks', 'shoes', 'gloves', 'arms', 'skin']);
+
+// The game's own team materials (jersey atlas with number and name, sheen, maps)
+function teamMats(teamIdx, home, num, name, i) {
+  const look = new TeamLook(TEAMS[teamIdx], home);
+  return look.athleteMats(num, { name, skin: i, sleeves: i % 2 === 1 });
+}
 
 function mats() {
   const out = {};
@@ -76,7 +84,8 @@ window.render = async (opts) => {
   await athleteReady;
   const names = opts.poses || Object.keys(POSES);
   names.forEach((n, i) => {
-    const a = makeAthlete(mats(), { w: opts.w ?? 1 });
+    const m = opts.team !== undefined ? teamMats(opts.team, opts.home !== false, 70 + i, opts.name || 'Okafor', i) : mats();
+    const a = makeAthlete(m, { w: opts.w ?? 1 });
     a.root.position.x = (i - (names.length - 1) / 2) * 1.25;
     a.root.rotation.y = opts.yaw ?? 0.5;
     apply(a, POSES[n]);

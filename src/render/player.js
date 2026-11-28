@@ -148,7 +148,8 @@ export class TeamLook {
       const decal = decalTexture(t, 128);
       decal.flipY = false; // glTF texture coordinates run top-down
       this.am = {
-        pants: applyDetail(new THREE.MeshStandardMaterial({ ...vc, map: pantsAtlas(t, home), roughness: 0.5 }), { knit: this.knit, knitScale: 0.12 }),
+        // Shiny stretch-polyester pants, with a cloth sheen at grazing angles
+        pants: applyDetail(new THREE.MeshStandardMaterial({ ...vc, map: pantsAtlas(t, home), roughness: 0.42 }), { knit: this.knit, knitScale: 0.12, sheen: 0.22 }),
         belt: applyDetail(new THREE.MeshStandardMaterial({ ...vc, color: home ? 0x161616 : t.secondary, roughness: 0.55 })),
         socks: applyDetail(new THREE.MeshStandardMaterial({ ...vc, color: home ? t.primary : t.secondary, roughness: 0.85 }), { knit: this.knit, knitScale: 0.2 }),
         shoes: applyDetail(new THREE.MeshStandardMaterial({ ...vc, color: home ? 0x141414 : 0xf0f0f0, roughness: 0.35, metalness: 0.05 })),
@@ -166,11 +167,14 @@ export class TeamLook {
       this.jerseyAtlasMats = new Map();
       this.tvMats = new Map();
     }
-    if (!this.jerseyAtlasMats.has(num)) {
-      this.jerseyAtlasMats.set(num, applyDetail(new THREE.MeshStandardMaterial({ vertexColors: true, map: jerseyAtlas(this.team, num, this.home), roughness: 0.72 }), { knit: this.knit, knitScale: 0.25 }));
+    // One jersey per number and name (the name is painted across the back)
+    const jkey = opts.name ? `${num}:${opts.name}` : String(num);
+    if (!this.jerseyAtlasMats.has(jkey)) {
+      // Mesh jersey fabric: matte, with a cloth sheen at grazing angles
+      this.jerseyAtlasMats.set(jkey, applyDetail(new THREE.MeshStandardMaterial({ vertexColors: true, map: jerseyAtlas(this.team, num, this.home, opts.name || ''), roughness: 0.72 }), { knit: this.knit, knitScale: 0.25, sheen: 0.35 }));
     }
     const skin = skinMaterial(opts.skin ?? 0);
-    return { ...this.am, jersey: this.jerseyAtlasMats.get(num), skin, arms: opts.sleeves ? this.am.compression : skin };
+    return { ...this.am, jersey: this.jerseyAtlasMats.get(jkey), skin, arms: opts.sleeves ? this.am.compression : skin };
   }
   tvMat(num) {
     if (!this.tvMats) this.athleteMats(num);
@@ -226,7 +230,7 @@ const TV_GEO = new THREE.PlaneGeometry(0.13, 0.087);
 const TOWEL_GEO = new THREE.PlaneGeometry(0.11, 0.24);
 
 export class PlayerModel {
-  // opts: { skin, size, bulk, visor, sleeves, towel }
+  // opts: { skin, size, bulk, visor, sleeves, towel, name (last name on the jersey back) }
   constructor(look, num, opts = {}) {
     // The Blender-built skinned athlete when it's loaded; the primitive model otherwise
     if (athleteTemplate() && !opts.primitive) this.buildSkinned(look, num, opts);

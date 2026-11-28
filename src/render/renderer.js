@@ -300,6 +300,7 @@ export class Renderer {
         visor: id % 5 === 0 || (skill && id % 3 === 1),
         sleeves: id % 3 === 0,
         towel: skill && id % 4 === 1,
+        name: p.last,
       });
       this.models.set(key, m);
       this.scene.add(m.root);

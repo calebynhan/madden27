@@ -1,5 +1,6 @@
 // Deformation check: node tools/viewer/posecheck.cjs out.png [json opts]
-// opts: { poses: [names], w: build (1 normal, 1.28 heavy, 0.85 lean), yaw, pos: [x,y,z], look: [x,y,z] }
+// opts: { poses: [names], w: build (1 normal, 1.28 heavy, 0.85 lean), yaw, pos: [x,y,z], look: [x,y,z],
+//         team: index into TEAMS to use the game's team materials (home: false for the away kit, name) }
 // Poses (tools/viewer/posecheck.js): rest, overhead, throw, sprint, stance, wings.
 const { chromium } = require('playwright');
 const fs = require('fs'), path = require('path');

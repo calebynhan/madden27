@@ -2,7 +2,7 @@
 // ball on the 30 and step through the play-call screen until a play is set at the line. Polls the
 // game state instead of waiting fixed times, so it also works on a slow software renderer.
 const POLL_MS = 150;
-const TIMEOUT_MS = 60000;
+const TIMEOUT_MS = 240000;
 
 async function gameState(page) {
   return page.evaluate(() => {
