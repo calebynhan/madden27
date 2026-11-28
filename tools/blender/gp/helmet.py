@@ -172,6 +172,19 @@ def _side_parts():
     return parts
 
 
+def _vents():
+    """Vent slots on the crown (front, side and back pairs): dark capsules half sunk into the
+    shell, following its meridians."""
+    out = []
+    for th, ps0, ps1 in ((0.34, 0.5, 0.82), (1.05, 0.42, 0.7), (2.55, 0.36, 0.62)):
+        for sg in (-1, 1):
+            pts = [shell_point(sg * th, ps0 + (ps1 - ps0) * i / 4, 1.0) for i in range(5)]
+            o = sweep('vent', pts, r=0.0068, segs=6)
+            set_mat(o, 'helmetpad')
+            out.append(o)
+    return out
+
+
 def _bumper_and_ridge():
     """Rubber bumper along the brow of the face opening."""
     pts = []
@@ -286,5 +299,5 @@ def _eyes(face_z):
 
 
 def build_helmet(face_z):
-    return ([_shell(), _stripe()] + _side_parts() + _bumper_and_ridge() + _facemask() + _chinstrap()
+    return ([_shell(), _stripe()] + _side_parts() + _vents() + _bumper_and_ridge() + _facemask() + _chinstrap()
             + _visor() + _eyes(face_z))

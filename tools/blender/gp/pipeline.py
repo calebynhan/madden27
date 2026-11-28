@@ -39,11 +39,28 @@ def fuse(parts, voxel, smooth_iter=6):
     return ob
 
 
-def retopo(ob, faces):
-    activate(ob)
-    bpy.ops.object.quadriflow_remesh(target_faces=faces, use_mesh_symmetry=True, use_preserve_sharp=False,
-                                     use_preserve_boundary=False, smooth_normals=False, seed=1)
-    return bpy.context.view_layer.objects.active
+BODY_FACES_MAX = 5350   # body quads that keep the whole player under TRI_BUDGET
+
+
+def retopo(ob, faces, max_faces=BODY_FACES_MAX, tries=6):
+    """Quad retopology. QuadriFlow's face count doesn't follow its target smoothly, so when the
+    result overshoots max_faces it retries from the fused mesh with a proportionally lower
+    target (deterministic: same input, same seed)."""
+    orig = ob.data.copy()
+    target = faces
+    for _ in range(tries):
+        activate(ob)
+        bpy.ops.object.quadriflow_remesh(target_faces=target, use_mesh_symmetry=True, use_preserve_sharp=False,
+                                         use_preserve_boundary=False, smooth_normals=False, seed=1)
+        ob = bpy.context.view_layer.objects.active
+        n = len(ob.data.polygons)
+        if n <= max_faces:
+            break
+        target = int(target * max_faces / n * 0.98)
+        print(f'[retopo] {n} faces is over {max_faces}; again with target {target}', flush=True)
+        ob.data = orig.copy()
+    bpy.data.meshes.remove(orig)
+    return ob
 
 
 def shade_smooth(ob):
@@ -191,14 +208,17 @@ def verify(path, want_normal):
         if names and sorted(names) != ['heavy', 'lean']:
             problems.append(f'morph targets {names}')
     nmaps = sum(1 for m in g.get('materials', []) if 'normalTexture' in m)
+    aomaps = sum(1 for m in g.get('materials', []) if 'occlusionTexture' in m)
     if want_normal and nmaps == 0:
         problems.append('no normalTexture')
+    if want_normal and aomaps == 0:
+        problems.append('no occlusionTexture')
     if tris > TRI_BUDGET:
         problems.append(f'{tris} triangles (budget {TRI_BUDGET})')
     size = os.path.getsize(path)
     if verts > VERT_BUDGET:
         problems.append(f'{verts} vertices after export splits (budget {VERT_BUDGET})')
-    print(f'[verify] {path}: {tris} tris, {verts} verts, {len(mats)} materials, {len(joints)} joints, {nmaps} with normal map, '
+    print(f'[verify] {path}: {tris} tris, {verts} verts, {len(mats)} materials, {len(joints)} joints, {nmaps} with normal map, {aomaps} with occlusion map, '
           f'{size / 1e6:.2f} MB, images {[i.get("mimeType") for i in g.get("images", [])]}, '
           f'extensions {g.get("extensionsRequired", [])}', flush=True)
     print('[verify] triangles by material:', ', '.join(f'{k} {v}' for k, v in sorted(per.items(), key=lambda kv: -kv[1])), flush=True)
@@ -208,7 +228,7 @@ def verify(path, want_normal):
 
 
 # ---------------------------------------------------------------- main
-def build(out, hd=False, faces=6600, stage=99, preview_dir=None, bake_size=2048, ship_size=1024, save=None):
+def build(out, hd=False, faces=6000, stage=99, preview_dir=None, bake_size=2048, ship_size=1024, save=None):
     clear()
     parts = body.build_body()
     low = fuse(parts, 0.0062, smooth_iter=4)
@@ -219,11 +239,12 @@ def build(out, hd=False, faces=6600, stage=99, preview_dir=None, bake_size=2048,
     uniform.zone_and_uv(low)
     shade_smooth(low)
     report(low, 'zoned')
-    nimg = None
+    nimg = aoimg = None
     if hd:
         bake.bake_uv(low)
         high = build_high(low)
         nimg = bake.bake_normal(low, high, os.path.splitext(out)[0] + '_normal.png', size=bake_size, ship=ship_size)
+        aoimg = bake.bake_ao_map(low, high, os.path.splitext(out)[0] + '_ao.png', size=ship_size)
         bpy.data.objects.remove(high, do_unlink=True)
     if stage >= 3:
         arm = rig.build_armature()
@@ -246,6 +267,8 @@ def build(out, hd=False, faces=6600, stage=99, preview_dir=None, bake_size=2048,
             bake.bake_ao(low)
     if nimg is not None:
         bake.wire_normal_map(low, nimg, NORMAL_MATS)
+    if aoimg is not None:
+        bake.wire_ao_map(low, aoimg, NORMAL_MATS)
     # No exported tangents: three.js derives the tangent frame per pixel (src/render/athlete.js
     # flips the green channel for it, as GLTFLoader does). Exported MikkTSpace tangents would
     # unweld every vertex of the parts parked on a single point of the bake UVs (helmet, mask,

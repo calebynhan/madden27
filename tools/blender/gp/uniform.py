@@ -18,7 +18,9 @@ WRIST_Y = 1.008      # glove cuff
 SOCK_Y = 0.399       # pants hem
 SHOE_Y = 0.10        # top of the cleats
 BELT_TOP, BELT_BOT = 1.102, 1.064
-COLLAR_Y = 1.758     # jersey collar / neck
+COLLAR_Y = 1.758     # jersey collar / neck (at the back and sides)
+V_DEPTH, V_HALF = 0.06, 0.08   # the V-neck dips this far below the collar at the front, this wide
+V_FRONT_Z = 0.035    # front of the neck (where the V opens)
 SLEEVE_TOP = 1.74    # top of the sleeve texture band (over the pad cap)
 CUTS = (SLEEVE_Y, WRIST_Y, SOCK_Y, SHOE_Y, BELT_TOP, BELT_BOT, COLLAR_Y)
 
@@ -68,16 +70,24 @@ def seg_bone(p):
     return SEG_BONE[nearest_seg(p)]
 
 
+def collar_y(p):
+    """Height of the jersey's neckline at p: the collar line, dipping into a V at the front."""
+    x, _, z = p
+    if z <= V_FRONT_Z:
+        return COLLAR_Y
+    return COLLAR_Y - V_DEPTH * max(0.0, 1.0 - abs(x) / V_HALF)
+
+
 def zone_of(p, k=None):
     """Uniform zone by body chain (which part of the body) and height (where the cut lines are)."""
     k = k or nearest_seg(p)
     y = p[1]
     base = k.split('_')[0]
     if base in ('head', 'neck'):
-        return 'skin' if y > COLLAR_Y else 'jersey'
+        return 'skin' if y > collar_y(p) else 'jersey'
     if base in ('upper', 'fore', 'hand'):
         return 'jersey' if y > SLEEVE_Y else ('arms' if y > WRIST_Y else 'gloves')
-    if y > COLLAR_Y:
+    if y > collar_y(p):
         return 'skin'
     if y > BELT_TOP:
         return 'jersey'
@@ -95,6 +105,21 @@ def cut_zones(ob):
     for y in CUTS:
         geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
         bmesh.ops.bisect_plane(bm, geom=geom, plane_co=V(0, y, 0), plane_no=Vector((0, 0, 1)), dist=1e-5)
+    # the two sides of the V-neck, each a plane through the bottom of the V, cutting only the
+    # front of the neck on its own side
+    for side in (-1, 1):
+        sel = []
+        for f in bm.faces:
+            x, y, z = T(f.calc_center_median())
+            if z > V_FRONT_Z - 0.01 and side * x > -0.006 and abs(x) < V_HALF + 0.02 and COLLAR_Y - V_DEPTH - 0.02 < y < COLLAR_Y + 0.01:
+                sel.append(f)
+        if not sel:
+            continue
+        verts = {v for f in sel for v in f.verts}
+        edges = {e for f in sel for e in f.edges}
+        nx, ny = -side * V_DEPTH, V_HALF          # normal of the line from the V's bottom up to its side
+        bmesh.ops.bisect_plane(bm, geom=list(verts) + list(edges) + sel, plane_co=V(0, COLLAR_Y - V_DEPTH, 0),
+                               plane_no=Vector((nx, 0, ny)).normalized(), dist=1e-5)
     bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 4])
     bm.to_mesh(ob.data)
     bm.free()
@@ -106,7 +131,7 @@ def ang(x, z):
 
 
 def _torso_v(p):
-    v = 0.22 + 0.78 * clamp01((p[1] - BELT_TOP) / (COLLAR_Y - BELT_TOP))
+    v = 0.22 + 0.78 * clamp01((p[1] - BELT_TOP) / (collar_y(p) - BELT_TOP))
     # only the collar itself reaches the trim band; the pad tops beside it stay body color
     r = math.hypot(p[0], p[2] + 0.014)
     if r > 0.112:

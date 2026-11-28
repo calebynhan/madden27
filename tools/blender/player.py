@@ -5,7 +5,7 @@
 #
 # Environment options:
 #   HD=0          skip the high-poly sculpt and normal-map bake (fast preview builds)
-#   FACES=6600    quad count of the body retopology
+#   FACES=6000    target quad count of the body retopology (capped at pipeline.BODY_FACES_MAX)
 #   PREVIEW=dir   also render Workbench previews (front/side/quarter/back/close-up/far) to dir
 #   TAG=name      file name prefix for the previews
 #   STAGE=n       stop early: 2 = body only, 3 = no AO bake
@@ -28,7 +28,7 @@ OUT = os.path.abspath(ARGS[0] if ARGS else 'player.glb')
 ok = pipeline.build(
     OUT,
     hd=os.environ.get('HD', '1') == '1',
-    faces=int(os.environ.get('FACES', '6600')),
+    faces=int(os.environ.get('FACES', '6000')),
     stage=int(os.environ.get('STAGE', '99')),
     preview_dir=os.environ.get('PREVIEW'),
     bake_size=int(os.environ.get('BAKESIZE', '2048')),

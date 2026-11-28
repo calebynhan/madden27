@@ -12,6 +12,13 @@ from .uniform import (seg_dists, zone_of, BELT_TOP, BELT_BOT, COLLAR_Y, SLEEVE_Y
 from .util import T, gauss, angd
 
 
+def _fold(t):
+    """Cloth fold profile along a phase t: a narrow raised ridge once per cycle over a broad,
+    shallow trough (zero on average), unlike a sine's even waves."""
+    c = (1 + math.cos(t)) / 2
+    return c ** 3 - 0.3125
+
+
 def _pad_edge(a, b, ca, cb, ra, rb, w, n=4.0):
     """A pad seen through the fabric: a raised rim along a rounded-rectangle outline (centre
     ca, cb, half-sizes ra, rb) and a slightly raised plate inside it."""
@@ -29,11 +36,16 @@ def _jersey_torso(x, y, z, nz):
     # fabric gathered above the belt: short vertical puckers
     d += 0.0042 * gauss(y - (BELT_TOP + 0.03), 0.032) * math.sin(ph * 23 + 2.5 * math.sin(ph * 4) + nz * 2.2)
     # loose fabric folds over the stomach and lower back
-    d += 0.0017 * gauss(y - 1.2, 0.06) * math.sin(ph * 7 + y * 40 + nz)
+    d += 0.0024 * gauss(y - 1.2, 0.06) * _fold(ph * 7 + y * 40 + nz)
     # tension folds running from the pads down toward the armpits, front and back
     if side > 0.45 and 1.36 < y < 1.62:
         s = 1 if ph > 0 else -1
-        d += 0.0034 * (side - 0.45) / 0.55 * math.sin((y * 46 - abs(x) * 30 * s) + nz) * gauss(y - 1.5, 0.09)
+        d += 0.0048 * (side - 0.45) / 0.55 * _fold((y * 46 - abs(x) * 30 * s) + nz) * gauss(y - 1.5, 0.09)
+    # a fan of compression folds radiating from each armpit, front and back
+    r = math.hypot(abs(x) - 0.235, y - 1.56)
+    if r < 0.14 and abs(x) > 0.14:
+        fan = math.atan2(y - 1.56, abs(x) - 0.235)
+        d += 0.0032 * _fold(fan * 9 + nz * 1.5) * gauss(r - 0.07, 0.035) * (1 - 0.6 * side)
     # the jersey drops off the front and back plates of the pads
     d -= 0.003 * gauss(y - 1.565, 0.012) * (1 - side)
     d += 0.0016 * gauss(y - 1.585, 0.012) * (1 - side)
@@ -53,7 +65,7 @@ def _sleeve(k, x, y, z, nz):
     pl = math.atan2((x - 0.32 * sx) * sx, z)
     d = 0.0018 * gauss(y - (SLEEVE_Y + 0.012), 0.005)                    # hem
     d -= 0.0012 * gauss(y - (SLEEVE_Y + 0.022), 0.003)                   # hem stitching
-    d += 0.0024 * gauss(y - 1.56, 0.035) * math.sin(pl * 3 + y * 42 + nz)  # sleeve folds
+    d += 0.0028 * gauss(y - 1.565, 0.03) * _fold(pl * 3 + y * 42 + nz)    # sleeve folds
     return d
 
 
@@ -66,7 +78,7 @@ def _pants(k, x, y, z, nz):
         pl = math.atan2(lx * sx, z)
         back = max(0.0, -math.cos(pl))
         front = max(0.0, math.cos(pl))
-        d += 0.0048 * back * gauss(y - 0.5, 0.05) * math.sin(y * 118 + pl * 2 + nz)      # behind the knee
+        d += 0.0055 * back * gauss(y - 0.5, 0.05) * _fold(y * 118 + pl * 2 + nz)          # behind the knee
         d += 0.0016 * gauss(y - (SOCK_Y + 0.012), 0.005)                                # hem
         if front > 0.25:
             d += 0.0017 * front * _pad_edge(lx * sx, y, 0.0, 0.732, 0.064, 0.112, 0.0045)       # thigh pad

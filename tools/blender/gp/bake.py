@@ -197,6 +197,75 @@ def bake_normal(low, high, out_path, size=2048, ship=1024):
     return img
 
 
+RAY_VIS = ('visible_camera', 'visible_diffuse', 'visible_glossy', 'visible_transmission', 'visible_volume_scatter',
+           'visible_shadow')
+
+
+def bake_ao_map(low, high, out_path, size=1024, distance=0.05, samples=64):
+    """Ambient occlusion of the sculpted high-poly (fabric folds, creases under the pads, between
+    fingers of fabric) on low's 'Bake' UVs: finer than the per-vertex occlusion. The low-poly
+    is kept out of the occlusion rays (it nearly coincides with the high-poly)."""
+    scn = bpy.context.scene
+    _cycles(scn, samples)
+    scn.world.light_settings.distance = distance
+    img = bpy.data.images.new('player_ao', size, size, alpha=False, float_buffer=False)
+    img.generated_color = (1.0, 1.0, 1.0, 1.0)
+    img.colorspace_settings.name = 'Non-Color'
+    added = [(m, _image_node(m, img)) for m in low.data.materials]
+    me = low.data
+    me.uv_layers.active = me.uv_layers['Bake']
+    vis = {k: getattr(low, k) for k in RAY_VIS if hasattr(low, k)}
+    for k in vis:
+        setattr(low, k, False)
+    activate(high)
+    low.select_set(True)
+    bpy.context.view_layer.objects.active = low
+    # keep the white background (no clear): mipmaps blend it into island edges at a distance
+    res = bpy.ops.object.bake(type='AO', use_selected_to_active=True, cage_extrusion=0.008, max_ray_distance=0.02,
+                              margin=12, use_clear=False, target='IMAGE_TEXTURES')
+    print('[bake] ao map', res, flush=True)
+    for k, v in vis.items():
+        setattr(low, k, v)
+    for m, n in added:
+        nt = m.node_tree
+        for x in [n] + [l.from_node for l in n.inputs['Vector'].links]:
+            nt.nodes.remove(x)
+    me.uv_layers.active = me.uv_layers['UVMap']
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    img.filepath_raw = out_path
+    img.file_format = 'PNG'
+    img.save()
+    return img
+
+
+def _gltf_output_group():
+    """The node group the glTF exporter reads extra outputs from (here: Occlusion)."""
+    name = 'glTF Material Output'
+    g = bpy.data.node_groups.get(name)
+    if g is None:
+        g = bpy.data.node_groups.new(name, 'ShaderNodeTree')
+        g.interface.new_socket('Occlusion', in_out='INPUT', socket_type='NodeSocketFloat')
+        g.nodes.new('NodeGroupOutput')
+        g.nodes.new('NodeGroupInput')
+    return g
+
+
+def wire_ao_map(body, img, mats):
+    """Hook the baked occlusion up as each body material's glTF occlusion (red channel, 'Bake'
+    UVs), exported as occlusionTexture with texCoord 1."""
+    grp = _gltf_output_group()
+    for m in body.data.materials:
+        if m.name not in mats:
+            continue
+        nt = m.node_tree
+        tex = _image_node(m, img)
+        sep = nt.nodes.new('ShaderNodeSeparateColor')
+        nt.links.new(tex.outputs['Color'], sep.inputs['Color'])
+        gn = nt.nodes.new('ShaderNodeGroup')
+        gn.node_tree = grp
+        nt.links.new(sep.outputs['Red'], gn.inputs['Occlusion'])
+
+
 def wire_normal_map(body, img, mats):
     """Hook the baked map up as each body material's normal map on the 'Bake' UVs, so the glTF
     exporter writes it as normalTexture with texCoord 1. The game keeps only the texture."""

@@ -15,14 +15,14 @@ PAD_ARCH_X = 0.19     # the raised arch over each shoulder
 def _torso_section():
     # y (absolute), half-width, front depth, back depth, superellipse exponent
     prof = lerp_prof([
-        (1.03, 0.150, 0.110, 0.120, 2.3),
-        (1.08, 0.151, 0.112, 0.120, 2.3),
-        (1.105, 0.153, 0.115, 0.121, 2.3),
-        (1.15, 0.163, 0.123, 0.128, 2.3),   # jersey bloused over the belt
-        (1.21, 0.166, 0.125, 0.128, 2.35),
-        (1.29, 0.173, 0.128, 0.131, 2.4),
-        (1.37, 0.184, 0.132, 0.137, 2.45),
-        (1.45, 0.198, 0.142, 0.146, 2.5),
+        (1.03, 0.157, 0.113, 0.123, 2.3),
+        (1.08, 0.158, 0.115, 0.123, 2.3),
+        (1.105, 0.160, 0.118, 0.124, 2.3),
+        (1.15, 0.171, 0.127, 0.132, 2.3),   # jersey bloused over the belt
+        (1.21, 0.175, 0.129, 0.133, 2.35),
+        (1.29, 0.182, 0.132, 0.136, 2.4),
+        (1.37, 0.192, 0.136, 0.141, 2.45),
+        (1.45, 0.203, 0.144, 0.148, 2.5),
         (1.52, 0.209, 0.152, 0.154, 2.55),
         (1.585, 0.216, 0.164, 0.163, 2.6),  # the pad's front and back plates
         (1.64, 0.218, 0.168, 0.168, 2.6),
@@ -92,18 +92,19 @@ def _pads():
 def _collar():
     """Jersey collar standing on the pads around the neck."""
     return loft('collar', (0, 1.705, -0.012), (0, 1.758, -0.014),
-                muscle_section(lerp_prof([(0, 0.106, 0.102), (0.6, 0.1, 0.096), (1, 0.097, 0.093)])), rings=6, segs=32)
+                muscle_section(lerp_prof([(0, 0.106, 0.102), (0.6, 0.1, 0.096), (1, 0.097, 0.093)]),
+                               bumps=((-0.07, 0.0, 0.5, 0.8, 0.4),)), rings=6, segs=32)
 
 
 def _belt_and_pelvis():
     parts = []
     # belt: a snug band (the jersey is tucked in above it)
     parts.append(loft('belt', (0, 1.064, -0.003), (0, 1.102, -0.003),
-                      muscle_section(lerp_prof([(0, 0.153, 0.117), (1, 0.154, 0.118)]), n=2.3), rings=3, segs=48))
+                      muscle_section(lerp_prof([(0, 0.16, 0.12), (1, 0.161, 0.121)]), n=2.3), rings=3, segs=48))
     # seat of the pants with hip pads at the sides and the glutes behind
-    parts.append(superellipsoid('pelvis', (0, 0.975, -0.012), (0.192, 0.128, 0.132), n_vert=2.3, n_horiz=2.5))
+    parts.append(superellipsoid('pelvis', (0, 0.975, -0.012), (0.2, 0.13, 0.136), n_vert=2.3, n_horiz=2.5))
     for s in (-1, 1):
-        parts.append(superellipsoid('glute', (0.07 * s, 0.94, -0.058), (0.088, 0.095, 0.078), segs=24, rings=16))
+        parts.append(superellipsoid('glute', (0.072 * s, 0.94, -0.062), (0.092, 0.1, 0.084), segs=24, rings=16))
         parts.append(superellipsoid('hippad', (0.178 * s, 0.985, -0.004), (0.03, 0.065, 0.075), segs=20, rings=12))
     return parts
 
@@ -114,6 +115,8 @@ def _neck_and_head():
     parts.append(loft('neck', (0, 1.70, -0.012), (0, 1.92, 0.0), muscle_section(
         lerp_prof([(0, 0.098, 0.092), (0.25, 0.088, 0.083), (0.7, 0.082, 0.078), (1, 0.074, 0.071)]),
         bumps=((0.06, 0.6, 0.35, 0.45, 0.25), (0.06, -0.6, 0.35, 0.45, 0.25), (0.05, math.pi, 0.8, 0.2, 0.2))), rings=12, segs=28))
+    for s in (-1, 1):   # trapezius sloping from the neck into the pads (a short, thick neck)
+        parts.append(superellipsoid('trap', (0.07 * s, 1.732, -0.03), (0.075, 0.046, 0.058), segs=20, rings=12))
     head = superellipsoid('head', (0, 1.945, 0.004), (0.084, 0.104, 0.099), n_vert=2.1, n_horiz=2.15,
                           fn=lambda x, y, z: (x * (1 - 0.18 * max(0, -y / 0.104)), y, z + 0.01 * max(0, -y / 0.104)))
     parts.append(head)
@@ -165,7 +168,7 @@ def _leg(s):
     m = s
     parts = []
     parts.append(loft('thigh', (0.115 * s, 0.99, -0.01), (lx, 0.45, 0.01), muscle_section(
-        lerp_prof([(0, 0.11, 0.115), (0.15, 0.118, 0.124), (0.4, 0.11, 0.116), (0.7, 0.094, 0.1), (1.0, 0.072, 0.074)]),
+        lerp_prof([(0, 0.114, 0.12), (0.15, 0.122, 0.128), (0.4, 0.114, 0.12), (0.7, 0.097, 0.103), (1.0, 0.073, 0.075)]),
         bumps=((0.05, 0.0, 0.8, 0.45, 0.25),              # quads
                (0.08, -0.65, 0.45, 0.8, 0.1),             # teardrop above the knee (inside)
                (0.04, math.pi, 0.9, 0.3, 0.25),           # hamstrings
